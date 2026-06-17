@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { fileURLToPath } from "node:url";
 import { readArg, readFlag } from "./lib/args.mjs";
-import { loadDotEnv } from "./lib/env.mjs";
 import { writeJson } from "./lib/files.mjs";
 import { getSheetValues, updateSheetValues } from "./lib/google-sheets-api.mjs";
 import { DEFAULT_SHEET_URL } from "./lib/tool-config.mjs";
@@ -25,8 +24,6 @@ import { evaluateKeywordRowsWithOpenAI } from "./lib/openai-keyword-agent.mjs";
 const TASK_SHEET = "词根拓展";
 const KEYWORD_TOTAL_SHEET = "关键词总表";
 const DEFAULT_LIMIT = 20;
-
-loadDotEnv();
 
 export { AGENT_STATUS_COLUMN };
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readArg } from "./lib/args.mjs";
 import {
   ensureChromeProfileTargetWithCdp,
   findChromeProfile
@@ -21,12 +22,6 @@ import {
 
 const DEFAULT_SHEET_URL =
   "https://docs.google.com/spreadsheets/d/1Ea3mSRW431QP08sq9tn3VoYEkj52hNRzY_GVizVLy3A/edit?gid=0#gid=0";
-
-function readArg(name, fallback) {
-  const prefix = `--${name}=`;
-  const arg = process.argv.find((item) => item.startsWith(prefix));
-  return arg ? arg.slice(prefix.length) : fallback;
-}
 
 function buildProfileWorkUrl(sheetUrl) {
   const url = new URL(sheetUrl);

@@ -10,7 +10,6 @@ import {
 } from "./lib/cdp.mjs";
 import { readArg, readFlag } from "./lib/args.mjs";
 import { sleep } from "./lib/browser-actions.mjs";
-import { loadDotEnv } from "./lib/env.mjs";
 import { writeJson } from "./lib/files.mjs";
 import { batchUpdateSheetValues, getSheetValues } from "./lib/google-sheets-api.mjs";
 import { columnName, headerIndex, valuesToTable } from "./lib/table-utils.mjs";
@@ -30,8 +29,6 @@ const KEYWORD_SHEET = "关键词总表";
 const DOMAIN_INFO_SHEET = "域名信息补全";
 const DOMAIN_INFO_STATUS_HEADER = "域名信息补全";
 const ADDRESS_URL = "https://www.meiguodizhi.com/tr-address";
-
-loadDotEnv();
 
 function quoteSheetName(sheetName) {
   return `'${String(sheetName).replaceAll("'", "''")}'`;

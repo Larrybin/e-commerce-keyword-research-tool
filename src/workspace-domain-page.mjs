@@ -15,7 +15,6 @@ import {
   ensureChromeProfileTargetWithCdp,
   findChromeProfile
 } from "./lib/chrome-profiles.mjs";
-import { loadDotEnv } from "./lib/env.mjs";
 import { batchUpdateSheetValues, getSheetValues } from "./lib/google-sheets-api.mjs";
 import {
   DEFAULT_SHEET_URL,
@@ -48,8 +47,6 @@ const DEFAULT_OUTPUT = "output/workspace-domain-page.json";
 const DEFAULT_KEYWORD_SHEET = "关键词总表";
 const DOMAIN_RECOMMENDATION_HEADER = "域名推荐";
 const DOMAIN_PRICE_HEADER = "价格";
-
-loadDotEnv();
 
 function json(value) {
   return JSON.stringify(value);

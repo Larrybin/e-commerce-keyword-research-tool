@@ -1,3 +1,7 @@
+import { loadDotEnv } from "./env.mjs";
+
+loadDotEnv();
+
 export function readArg(name, fallback) {
   const prefix = `--${name}=`;
   const arg = process.argv.find((item) => item.startsWith(prefix));
