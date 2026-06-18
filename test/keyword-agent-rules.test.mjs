@@ -1,239 +1,74 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluateKeywordAgentRow } from "../src/lib/keyword-agent-rules.mjs";
+import { evaluateKeywordAgentRow, targetAgentColumns } from "../src/lib/keyword-agent-rules.mjs";
 
-const toolRule = {
-  "意图": "工具站",
-  "变现渠道1": "广告",
-  "变现渠道2": "轻saas",
-  "能力1": "批量建轻量工具站",
-  "能力2": "轻量简单SaaS"
-};
+const commerceRule = { "目标模式": "电商,B端", "可售品类": "generator, parts, accessories" };
+const ecommerceOnlyRule = { "目标模式": "电商", "可售品类": "consumer products, parts" };
+const b2bOnlyRule = { "目标模式": "B端", "可售品类": "industrial products" };
+function row(keyword) { return { record: { "关键词": keyword } }; }
 
-function row(keyword) {
-  return {
-    record: {
-      "关键词": keyword
-    }
-  };
-}
-
-test("keyword agent keeps tool keywords when customer intent is tool site", () => {
-  const result = evaluateKeywordAgentRow(row("invoice generator"), toolRule);
-
-  assert.equal(result.values["意图"], "工具站");
-  assert.equal(result.values["第一次判断"], "继续");
+test("agent target columns are ecommerce/B2B business fields", () => {
+  assert.deepEqual(targetAgentColumns(), ["购买意图", "产品类型", "建议", "判断依据", "评级"]);
 });
 
-test("keyword agent rejects tool keywords when customer intent is B2B showcase", () => {
-  const result = evaluateKeywordAgentRow(row("invoice generator"), {
-    ...toolRule,
-    "意图": "B端展示站"
-  });
-
-  assert.equal(result.values["意图"], "其他");
-  assert.equal(result.values["第一次判断"], "排除");
-  assert.match(result.values["判断依据"], /工具站|不匹配客户目标B端展示站/);
-  assert.equal(result.values["agent状态"], "排除");
-});
-
-test("keyword agent keeps B2B supplier keywords for B2B showcase intent", () => {
-  for (const keyword of ["gaming microphone manufacturer", "fpv drone supplier"]) {
-    const result = evaluateKeywordAgentRow(row(keyword), {
-      ...toolRule,
-      "意图": "B端展示站",
-      "变现渠道1": "其他",
-      "变现渠道2": "",
-      "能力1": "B端展示站",
-      "能力2": "询盘页"
-    });
-
-    assert.equal(result.values["意图"], "B端展示站");
-    assert.equal(result.values["第一次判断"], "继续");
-    assert.match(`${result.values["判断依据"]} ${result.values["建议"]}`, /B端|供应商|询盘|线索|企业采购|RFQ/);
+test("physical ecommerce product keywords are kept instead of excluded", () => {
+  for (const keyword of ["portable generator", "solar generator"]) {
+    const result = evaluateKeywordAgentRow(row(keyword), commerceRule);
     assert.equal(result.values["agent状态"], "完成");
+    assert.equal(result.values["产品类型"], "实体商品");
+    assert.notEqual(result.values["购买意图"], "排除");
+    assert.match(result.values["判断依据"], /实体商品|物流|履约|认证/);
   }
 });
 
-test("keyword agent rejects B2B supplier keywords for tool site intent", () => {
-  const result = evaluateKeywordAgentRow(row("memory chip distributor"), toolRule);
-
-  assert.equal(result.values["意图"], "其他");
-  assert.equal(result.values["第一次判断"], "排除");
-  assert.match(result.values["判断依据"], /B端展示站|供应商|不匹配客户目标工具站/);
-});
-
-test("keyword agent can recommend B2B showcase monetization when other channel is allowed", () => {
-  const result = evaluateKeywordAgentRow(row("gaming microphone manufacturer"), {
-    "意图": "B端展示站",
-    "变现渠道1": "其他",
-    "变现渠道2": "",
-    "能力1": "B端展示站",
-    "能力2": "询盘页"
-  });
-
-  assert.equal(result.values["变现渠道"], "其他");
-  assert.equal(result.values["第二次判断"], "推荐");
-  assert.equal(result.values["第三次判断"], "推荐");
-  assert.equal(result.values["评级"], "B");
-});
-
-test("keyword agent rejects B2B showcase monetization when other channel is not allowed", () => {
-  const result = evaluateKeywordAgentRow(row("gaming microphone manufacturer"), {
-    "意图": "B端展示站",
-    "变现渠道1": "广告",
-    "变现渠道2": "",
-    "能力1": "B端展示站",
-    "能力2": ""
-  });
-
-  assert.equal(result.values["变现渠道"], "其他");
-  assert.equal(result.values["第三次判断"], "不推荐");
-  assert.match(result.values["判断依据"], /不匹配客户变现渠道|询盘|线索变现不匹配/);
-});
-
-test("keyword agent stops after first judgement for AI-replaced simple utilities", () => {
-  for (const keyword of ["percentage calculator", "calendar calculator"]) {
-    const result = evaluateKeywordAgentRow(row(keyword), toolRule);
-
-    assert.equal(result.stopAfterFirstJudgement, true);
-    assert.equal(result.values["意图"], "其他");
-    assert.equal(result.values["第一次判断"], "排除");
-    assert.match(result.values["判断依据"], /可被AI直接满足/);
-    assert.equal(result.values["agent状态"], "排除");
-  }
-});
-
-test("keyword agent excludes adult and high-risk terms", () => {
-  assert.equal(evaluateKeywordAgentRow(row("ai porn generator"), toolRule).values["第一次判断"], "排除");
-  assert.equal(evaluateKeywordAgentRow(row("casino odds calculator"), toolRule).values["第一次判断"], "排除");
-  assert.equal(evaluateKeywordAgentRow(row("peptide calculator"), toolRule).values["第一次判断"], "排除");
-  assert.equal(evaluateKeywordAgentRow(row("software engineer salary"), toolRule).values["第一次判断"], "排除");
-});
-
-test("keyword agent keeps financial education calculators with risk warnings", () => {
-  for (const keyword of [
-    "401k calculator",
-    "retirement calculator",
-    "mortgage calculator",
-    "loan calculator",
-    "cd calculator",
-    "roth ira calculator",
-    "paycheck calculator",
-    "salary paycheck calculator"
-  ]) {
-    const result = evaluateKeywordAgentRow(row(keyword), {
-      ...toolRule,
-      "变现渠道1": "广告",
-      "变现渠道2": ""
-    });
-
-    assert.equal(result.values["第一次判断"], "继续");
-    assert.equal(result.values["agent状态"], "完成");
-    assert.match(result.values["判断依据"], /教育|YMYL|财务建议|免责声明/);
-    assert.match(result.values["建议"], /教育|估算|财务建议|免责声明/);
-  }
-});
-
-test("keyword agent keeps health education calculators with risk warnings", () => {
-  for (const keyword of ["due date calculator", "pregnancy calculator", "pregnancy due date calculator", "ivf due date calculator", "recipe calorie calculator"]) {
-    const result = evaluateKeywordAgentRow(row(keyword), toolRule);
-
-    assert.equal(result.values["意图"], "工具站");
-    assert.equal(result.values["第一次判断"], "继续");
-    assert.equal(result.values["agent状态"], "完成");
-    assert.match(`${result.values["判断依据"]} ${result.values["建议"]}`, /健康教育|YMYL|免责声明|医疗建议/);
-  }
-});
-
-test("keyword agent excludes legal tax and investment terms when difficulty is not light", () => {
-  const tax = evaluateKeywordAgentRow(row("tax calculator"), toolRule);
-  assert.equal(tax.values["意图"], "其他");
-  assert.equal(tax.values["第一次判断"], "排除");
-  assert.notEqual(tax.values["判断依据"], "");
-  assert.equal(tax.values["agent状态"], "排除");
-
-  const crypto = evaluateKeywordAgentRow(row("crypto calculator"), toolRule);
-  assert.equal(crypto.values["第一次判断"], "排除");
-  assert.match(crypto.values["判断依据"], /金融投资|排除项/);
-
-  const investment = evaluateKeywordAgentRow(row("investment calculator"), toolRule);
-  assert.equal(investment.values["第一次判断"], "排除");
-  assert.match(investment.values["判断依据"], /金融投资|排除项/);
-});
-
-test("keyword agent excludes soft exclusion terms when brand or copyright risk is present", () => {
-  const result = evaluateKeywordAgentRow(row("adobe tax calculator"), toolRule);
-
-  assert.equal(result.values["意图"], "其他");
-  assert.equal(result.values["第一次判断"], "排除");
-  assert.equal(result.values["agent状态"], "排除");
-  assert.match(result.values["判断依据"], /品牌\/版权风险|降级排除/);
-});
-
-test("keyword agent rejects physical generator product keywords", () => {
-  for (const keyword of ["honda generator", "solar generator", "portable generator"]) {
-    const result = evaluateKeywordAgentRow(row(keyword), toolRule);
-    assert.equal(result.values["意图"], "其他");
-    assert.equal(result.values["第一次判断"], "排除");
-    assert.notEqual(result.values["判断依据"], "");
-    assert.equal(result.values["agent状态"], "排除");
-  }
-});
-
-test("keyword agent downgrades brand terms without rejecting light and medium opportunities", () => {
-  for (const keyword of [
-    "canva qr code generator",
-    "starbucks calorie calculator",
-    "smartasset paycheck calculator",
-    "dave ramsey mortgage calculator"
-  ]) {
-    const result = evaluateKeywordAgentRow(row(keyword), toolRule);
-
-    assert.equal(result.values["第一次判断"], "继续");
-    assert.match(`${result.values["建议"]} ${result.values["判断依据"]}`, /品牌|商标|风险/);
-    assert.equal(result.values["agent状态"], "完成");
-    assert.notEqual(result.values["评级"], "A");
-  }
-});
-
-test("keyword agent excludes heavy brand opportunities after risk downgrade", () => {
-  for (const keyword of ["perchance ai story generator", "suno ai music generator"]) {
-    const result = evaluateKeywordAgentRow(row(keyword), toolRule);
-
-    assert.equal(result.values["意图"], "其他");
-    assert.equal(result.values["第一次判断"], "排除");
-    assert.match(result.values["判断依据"], /品牌\/版权风险|降级排除/);
-    assert.equal(result.values["agent状态"], "排除");
-  }
-});
-
-test("keyword agent marks heavy tools as not matching light edge capability", () => {
-  for (const keyword of ["upc generator", "map calculator", "online video editor"]) {
-    const result = evaluateKeywordAgentRow(row(keyword), toolRule);
-
-    assert.equal(result.values["评级"] === "A", false);
-    assert.equal(result.values["第二次判断"], "不推荐");
-  }
-});
-
-test("keyword agent rejects recommendation content intent for video editors", () => {
-  const result = evaluateKeywordAgentRow(row("best free video editor"), toolRule);
-
-  assert.equal(result.values["意图"], "其他");
-  assert.equal(result.values["第一次判断"], "排除");
-  assert.match(result.values["判断依据"], /推荐|对比|内容意图/);
-  assert.equal(result.values["agent状态"], "排除");
-});
-
-test("keyword agent rejects monetization mismatch", () => {
-  const result = evaluateKeywordAgentRow(row("random word generator"), {
-    ...toolRule,
-    "变现渠道1": "轻saas",
-    "变现渠道2": ""
-  });
-
-  assert.equal(result.values["变现渠道"], "广告");
-  assert.equal(result.values["第三次判断"], "不推荐");
+test("parts and accessories are strong ecommerce opportunities", () => {
+  const result = evaluateKeywordAgentRow(row("generator replacement battery"), commerceRule);
+  assert.equal(result.values["购买意图"], "强");
+  assert.equal(result.values["产品类型"], "配件耗材");
   assert.equal(result.values["评级"], "A");
+  assert.match(result.values["建议"], /配件|耗材|SKU|毛利/);
+});
+
+test("B2B supplier keywords are kept for B端 target mode", () => {
+  const result = evaluateKeywordAgentRow(row("gaming microphone manufacturer"), b2bOnlyRule);
+  assert.equal(result.values["购买意图"], "B端采购");
+  assert.equal(result.values["产品类型"], "B端采购");
+  assert.equal(result.values["agent状态"], "完成");
+  assert.match(`${result.values["建议"]} ${result.values["判断依据"]}`, /B端|询盘|MOQ|报价|采购/);
+});
+
+test("B2B supplier keywords are rejected when only ecommerce target mode is allowed", () => {
+  const result = evaluateKeywordAgentRow(row("memory chip distributor"), ecommerceOnlyRule);
+  assert.equal(result.values["购买意图"], "排除");
+  assert.equal(result.values["agent状态"], "排除");
+  assert.match(result.values["判断依据"], /不匹配目标模式|B端/);
+});
+
+test("review and comparison keywords become content commerce opportunities", () => {
+  const result = evaluateKeywordAgentRow(row("best portable generator reviews"), commerceRule);
+  assert.equal(result.values["产品类型"], "导购评测");
+  assert.equal(result.values["购买意图"], "中");
+  assert.match(result.values["建议"], /内容导购|联盟|评测/);
+});
+
+test("brand product keywords are kept but downgraded for trademark/authorization risk", () => {
+  const result = evaluateKeywordAgentRow(row("honda generator price"), commerceRule);
+  assert.equal(result.values["产品类型"], "品牌商品");
+  assert.equal(result.values["购买意图"], "强");
+  assert.equal(result.values["评级"], "C");
+  assert.match(`${result.values["建议"]} ${result.values["判断依据"]}`, /品牌|商标|授权/);
+});
+
+test("manual and local-service terms are weak ecommerce intents", () => {
+  assert.equal(evaluateKeywordAgentRow(row("generator manual pdf"), commerceRule).values["产品类型"], "售后信息");
+  assert.equal(evaluateKeywordAgentRow(row("generator repair near me"), commerceRule).values["产品类型"], "本地服务");
+});
+
+test("hard-risk ecommerce categories are excluded", () => {
+  for (const keyword of ["replica rolex", "ozempic pen for sale", "casino chips buy"]) {
+    const result = evaluateKeywordAgentRow(row(keyword), commerceRule);
+    assert.equal(result.values["购买意图"], "排除", keyword);
+    assert.equal(result.values["产品类型"], "高风险品类", keyword);
+    assert.equal(result.values["agent状态"], "排除", keyword);
+  }
 });

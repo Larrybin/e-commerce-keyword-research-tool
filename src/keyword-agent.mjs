@@ -76,9 +76,8 @@ function summarizeRule(rule = {}) {
   return {
     root: String(rule["词根"] || "").trim(),
     keyword: String(rule["关键词"] || "").trim(),
-    intent: String(rule["意图"] || "").trim(),
-    monetizationChannels: compactList([rule["变现渠道1"], rule["变现渠道2"]]),
-    abilities: compactList([rule["能力1"], rule["能力2"]])
+    targetModes: compactList(String(rule["目标模式"] || rule["意图"] || "").split(/[、,，/|]+/)),
+    sellableCategories: String(rule["可售品类"] || "").trim()
   };
 }
 
