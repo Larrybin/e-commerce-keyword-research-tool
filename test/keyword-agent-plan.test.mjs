@@ -23,21 +23,15 @@ test("buildPlanOnlySummary generates skipped and planned rows", () => {
       pendingItem(10, "invoice generator", {
         "词根": "generator",
         "关键词": "",
-        "意图": "工具站",
-        "变现渠道1": "轻saas",
-        "变现渠道2": "",
-        "能力1": "工具站",
-        "能力2": "",
+        "目标模式": "电商",
+        "可售品类": "parts",
         "完整规则不应暴露": "secret"
       }),
       pendingItem(11, "canva qr code generator", {
         "词根": "generator",
         "关键词": "",
-        "意图": "工具站",
-        "变现渠道1": "广告",
-        "变现渠道2": "",
-        "能力1": "工具站",
-        "能力2": "品牌风险判断"
+        "目标模式": "电商",
+        "可售品类": "brand accessories"
       })
     ],
     collectedSummaries: [
@@ -64,9 +58,8 @@ test("buildPlanOnlySummary generates skipped and planned rows", () => {
   assert.equal(plannedRows.length, 2);
   assert.equal(plannedRows[0].wouldEvaluate, true);
   assert.equal(plannedRows[0].wouldWrite, false);
-  assert.equal(plannedRows[0].rule.intent, "工具站");
-  assert.deepEqual(plannedRows[0].rule.monetizationChannels, ["轻saas"]);
-  assert.deepEqual(plannedRows[0].rule.abilities, ["工具站"]);
+  assert.deepEqual(plannedRows[0].rule.targetModes, ["电商"]);
+  assert.equal(plannedRows[0].rule.sellableCategories, "parts");
   assert.equal(Object.hasOwn(plannedRows[0].rule, "完整规则不应暴露"), false);
   assert.equal(Object.hasOwn(plannedRows[0], "researchNeeded"), false);
 });

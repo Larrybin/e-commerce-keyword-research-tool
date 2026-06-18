@@ -1,542 +1,126 @@
 const TARGET_COLUMNS = [
-  "意图",
-  "第一次判断",
-  "难度",
-  "第二次判断",
-  "变现渠道",
-  "第三次判断",
+  "购买意图",
+  "产品类型",
   "建议",
   "判断依据",
   "评级"
 ];
 export const AGENT_STATUS_COLUMN = "agent状态";
 
-const TOOL_SUFFIXES = new Set([
-  "calculator",
-  "checker",
-  "converter",
-  "generator",
-  "compiler",
-  "editor",
-  "tester",
-  "interpreter",
-  "formatter",
-  "creator",
-  "maker",
-  "planner",
-  "tracker",
-  "timer"
-]);
-
-const DOMAIN_SUFFIXES = new Set(["online", "pro", "tool", "app"]);
-
-const BRAND_PATTERNS = [
-  /\badobe\b/,
-  /\bdesmos\b/,
-  /\bchipotle\b/,
-  /\bcanva\b/,
-  /\badp\b/,
-  /\blastpass\b/,
-  /\bnorton\b/,
-  /\brunway\b/,
-  /\bchatgpt\b/,
-  /\bchat\s*gpt\b/,
-  /\bgemini\b/,
-  /\bsuno\b/,
-  /\bscribbr\b/,
-  /\bgenerac\b/,
-  /\bhonda\b/,
-  /\bjackery\b/,
-  /\bperchance\b/,
-  /\bstarbucks\b/,
-  /\bsmartasset\b/,
-  /\bdave\s+ramsey\b/,
-  /\bcapcut\b/
-];
-
-const DIRECT_EXCLUSION_PATTERNS = [
+const HARD_EXCLUSION_PATTERNS = [
   { type: "成人敏感", pattern: /\b(porn|porno|nsfw|adult|nude|xxx|hentai|erotic|sex)\b/ },
   { type: "赌博博彩", pattern: /\b(casino|slots?|sportsbook|betting|gambling|lottery|poker)\b/ },
   { type: "破解盗版", pattern: /\b(cracks?|cracked|torrent|pirate|mod\s*apk|keygen|activation|bypass|unlocker?)\b/ },
-  { type: "医疗高风险", pattern: /\b(dosage|dose|drug|medication|symptom|diagnosis|peptide)\b/ },
-  { type: "推荐/对比内容意图", pattern: /\b(best|top|review|reviews|recommend(?:ed|ation)?|comparison)\s+(free\s+)?video\s+editors?\b|\bfree\s+video\s+editor\s+apps?\b/ },
-  { type: "实体发电机/商品词", pattern: /\b(honda|generac|jackery|portable|solar|powered|power|inverter|whole\s+house|standby|diesel|gas|propane|ozone)\s+generator\b|\bgenerator\s+(for\s+sale|price|parts|manual|oil|battery|repair)\b/ },
-  { type: "招聘/工资/职位", pattern: /\b(jobs?|careers?|salaries|positions?|hiring|recruit(?:ing|ment)?)\b|\bsalary\b(?!\s+paycheck\s+calculator\b)/ }
+  { type: "处方/医疗高风险", pattern: /\b(ozempic|semaglutide|prescription|rx|drug|dosage|dose|peptide|steroid|syringe)\b/ },
+  { type: "仿牌/侵权", pattern: /\b(replica|fake|counterfeit|knockoff)\b/ }
 ];
-
-const SOFT_EXCLUSION_PATTERNS = [
-  { type: "法律税务高风险", pattern: /\b(legal|lawyer|lawsuit|tax|irs)\b/ },
-  { type: "金融投资建议", pattern: /\b(stock\s+market|crypto\s+trading|day\s+trading|options?\s+profit|stock|crypto|forex|trading|investment|investing)\b/ }
-];
-
-const SIMPLE_AI_REPLACED_PATTERNS = [
-  { type: "单位换算", pattern: /\b(cm|centimeter|inches?|inch|kg|kilogram|lbs?|pounds?|mile|km|kilometer|meter|feet|foot|fahrenheit|celsius)\s+to\s+(cm|centimeter|inches?|inch|kg|kilogram|lbs?|pounds?|mile|km|kilometer|meter|feet|foot|fahrenheit|celsius)\b/ },
-  { type: "货币换算", pattern: /\b(usd|eur|gbp|jpy|cny|rmb|cad|aud|hkd)\s+to\s+(usd|eur|gbp|jpy|cny|rmb|cad|aud|hkd)\b|\bcurrency\s+(converter|calculator)\b|\bexchange\s+rate\b/ },
-  { type: "简单数学", pattern: /\b(percent|percentage)\b/ },
-  { type: "日期时间", pattern: /\b(days?\s+between|date\s+calculator|calendar\s+calculator|time\s+duration|hours?\s+calculator|minutes?\s+calculator)\b/ }
-];
-
-const LIGHT_PATTERNS = [
-  /\b(text|font|cursive|bold|italic|tiny|ascii|zalgo|glitch|morse|signature|barcode|qr|password|random|name|word|letter|color|team|group|bingo|bracket|citation|mla|apa|chicago|acs|ama|ieee|invoice|grade|gpa|tip|body\s*fat|bmi|tdee|calorie|1rm|one\s+rep|max|pace|sleep|pregnancy|due\s+date|concrete|square\s+footage|fraction|average|standard\s+deviation|compound\s+interest)\b/
-];
-
-const HEAVY_PATTERNS = [
-  /\b(ai|image|video|music|song|lyrics|chatgpt|chat\s*gpt|gemini|runway|suno|perchance|tattoo|map|upc|desmos|scientific)\b/
-];
-
-const SAAS_SIGNAL_PATTERNS = [
-  /\b(invoice|email\s+signature|signature|citation|mla|apa|chicago|acs|ama|ieee|resume|cover\s+letter|barcode|qr|time\s+card|time\s+clock|grade|gpa|pdf|csv|api|bulk|batch|template|tracker|planner|editor|compiler|formatter|checker)\b/
-];
-
-const FINANCIAL_EDUCATION_PATTERNS = [
-  /\b(401\s*k|401k|retirement|mortgage|loan|compound\s+interest|savings|debt\s+payoff|cd|certificate\s+of\s+deposit|roth\s+ira|ira|paycheck|salary\s+paycheck)\s+calculator\b/
-];
-
-const HEALTH_EDUCATION_PATTERNS = [
-  /\b(pregnancy\s+due\s+date|ivf\s+due\s+date|due\s+date|pregnancy|ovulation|conception|bmi|body\s*fat|recipe\s+calorie|calorie|tdee)\s+calculator\b/
-];
-
-const B2B_SHOWCASE_PATTERNS = [
-  /\b(manufacturers?|suppliers?|factor(?:y|ies)|wholesale|distributors?|vendors?|oem|odm|private\s+label|custom\s+manufacturers?|bulk|industrial|enterprise|solutions?|service\s+providers?|compan(?:y|ies)|rfq|quotes?|quotation)\b/
-];
+const B2B_PATTERNS = [/\b(manufacturers?|suppliers?|factor(?:y|ies)|wholesale|distributors?|vendors?|oem|odm|private\s+label|bulk|industrial|rfq|quotes?|quotation)\b/];
+const STRONG_PURCHASE_PATTERNS = [/\b(buy|for\s+sale|price|prices|cheap|discount|coupon|deals?|shop|store)\b/];
+const COMPARISON_PATTERNS = [/\b(best|top|review|reviews|vs|versus|comparison|compare)\b/];
+const PARTS_PATTERNS = [/\b(parts?|replacement|accessor(?:y|ies)|battery|cover|filter|refill|cartridge|charger|case|kit|compatible)\b/];
+const SERVICE_PATTERNS = [/\b(repair|installation|install|near\s+me|local\s+service|service\s+nearby)\b/];
+const INFO_PATTERNS = [/\b(manual|pdf|instructions?|how\s+to|troubleshoot(?:ing)?)\b/];
+const BRAND_PATTERNS = [/\bhonda\b/, /\bgenerac\b/, /\bjackery\b/, /\bapple\b/, /\biphone\b/, /\bdyson\b/, /\bnike\b/, /\badidas\b/];
+const HEAVY_FULFILLMENT_PATTERNS = [/\b(generator|furniture|mattress|battery|solar|appliance|treadmill)\b/];
+const LOW_MARGIN_PATTERNS = [/\b(cheap|cable|charger|phone\s+case)\b/];
 
 function normalize(value) {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/&/g, " and ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return String(value || "").toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 }
-
-function tokens(value) {
-  const text = normalize(value);
-  return text ? text.split(" ") : [];
+function hasAny(patterns, text) { return patterns.some((pattern) => pattern.test(text)); }
+function firstMatch(patterns, text) { return patterns.find((item) => item.pattern.test(text)) || null; }
+function compact(parts, limit = 80) { const text = parts.filter(Boolean).join("；"); return text.length <= limit ? text : text.slice(0, limit); }
+function targetModes(rule) {
+  return String(rule?.["目标模式"] || rule?.["意图"] || "电商,B端")
+    .split(/[、,，/|]+/).map((item) => item.trim()).filter(Boolean);
 }
-
-function firstMatch(patterns, text) {
-  return patterns.find((item) => item.pattern.test(text)) || null;
+function sellableCategories(rule) { return String(rule?.["可售品类"] || "").trim(); }
+function allowsMode(rule, mode) {
+  const modes = targetModes(rule).join(" ").toLowerCase();
+  if (!modes) return true;
+  if ((/电商|ecommerce/.test(modes)) && (/b端|b2b|询盘/.test(modes))) return true;
+  if (mode === "B端" && /b端|b2b|询盘|批发|supplier/.test(modes)) return true;
+  if (mode === "电商" && /电商|自营|affiliate|联盟|dropshipping|导购/.test(modes)) return true;
+  return false;
 }
-
-function hasAny(patterns, text) {
-  return patterns.some((pattern) => pattern.test(text));
-}
-
-function compactText(parts, limit = 50) {
-  const text = parts.filter(Boolean).join("；");
-  return text.length <= limit ? text : text.slice(0, limit - 1);
-}
-
-function exclusionRationale(keyword, reason) {
-  if (reason === "实体发电机/商品词") {
-    return "真实意图是实体发电机/商品词，不是在线工具需求";
-  }
-  if (String(reason || "").includes("可被AI直接满足")) {
-    return reason;
-  }
-  return compactText([reason || "不符合客户目标意图"], 80);
-}
-
-function parseChannels(rule) {
-  return [rule?.["变现渠道1"], rule?.["变现渠道2"]]
-    .map((value) => String(value || "").trim().toLowerCase())
-    .filter(Boolean)
-    .map((value) => value === "轻saas" || value === "轻SaaS".toLowerCase() ? "轻saas" : value);
-}
-
-function targetIntent(rule) {
-  return String(rule?.["意图"] || "工具站").trim() || "工具站";
-}
-
-function abilities(rule) {
-  return [rule?.["能力1"], rule?.["能力2"]]
-    .map((value) => String(value || "").trim())
-    .filter(Boolean);
-}
-
-function isBrandKeyword(text) {
-  return hasAny(BRAND_PATTERNS, text);
-}
-
-function detectFinancialEducationRisk(keyword) {
+function productType(keyword) {
   const text = normalize(keyword);
-  if (!hasAny(FINANCIAL_EDUCATION_PATTERNS, text)) {
-    return {
-      matched: false,
-      label: "",
-      rationale: ""
-    };
-  }
-  return {
-    matched: true,
-    label: "金融教育估算/YMYL",
-    rationale: /\b(cd|certificate\s+of\s+deposit)\s+calculator\b/.test(text)
-      ? "Certificate of Deposit金融教育估算/YMYL，仅作教育用途，需免责声明避免财务建议"
-      : "金融教育估算/YMYL，仅作教育用途，需免责声明避免财务建议"
-  };
+  if (hasAny(SERVICE_PATTERNS, text)) return "本地服务";
+  if (hasAny(INFO_PATTERNS, text)) return "售后信息";
+  if (hasAny(B2B_PATTERNS, text)) return "B端采购";
+  if (hasAny(PARTS_PATTERNS, text)) return "配件耗材";
+  if (hasAny(COMPARISON_PATTERNS, text)) return "导购评测";
+  if (hasAny(BRAND_PATTERNS, text)) return "品牌商品";
+  return "实体商品";
 }
-
-function detectHealthEducationRisk(keyword) {
+function purchaseIntent(type, keyword) {
   const text = normalize(keyword);
-  if (!hasAny(HEALTH_EDUCATION_PATTERNS, text)) {
-    return {
-      matched: false,
-      label: "",
-      rationale: ""
-    };
-  }
-  return {
-    matched: true,
-    label: "健康教育估算/YMYL",
-    rationale: "健康教育估算/YMYL，仅作教育用途，需免责声明避免医疗建议"
-  };
+  if (type === "B端采购") return "B端采购";
+  if (type === "本地服务" || type === "售后信息") return "弱";
+  if (hasAny(STRONG_PURCHASE_PATTERNS, text) || type === "配件耗材") return "强";
+  if (type === "导购评测" || type === "品牌商品" || type === "实体商品") return "中";
+  return "弱";
 }
-
-function isToolShapedKeyword(keyword) {
-  const parts = tokens(keyword);
-  const last = parts[parts.length - 1] || "";
-  return (
-    TOOL_SUFFIXES.has(last) ||
-    DOMAIN_SUFFIXES.has(last) ||
-    parts.some((part) => TOOL_SUFFIXES.has(part))
-  );
-}
-
-function detectActualIntent(keyword) {
+function ratingFor({ intent, type, keyword }) {
   const text = normalize(keyword);
-  if (isToolShapedKeyword(keyword)) {
-    return {
-      intent: "工具站",
-      reason: "明确在线工具/计算器需求"
-    };
-  }
-  if (hasAny(B2B_SHOWCASE_PATTERNS, text)) {
-    return {
-      intent: "B端展示站",
-      reason: "供应商/OEM/批发/企业采购意图"
-    };
-  }
-  return {
-    intent: "其他",
-    reason: "不符合工具站或B端展示站需求"
-  };
+  if (intent === "排除") return "";
+  let score = 0;
+  if (intent === "强" || intent === "B端采购") score += 2;
+  if (intent === "中") score += 1;
+  if (type === "配件耗材" || type === "B端采购") score += 1;
+  if (type === "导购评测") score += 0;
+  if (type === "本地服务" || type === "售后信息") score -= 3;
+  if (type !== "配件耗材" && hasAny(HEAVY_FULFILLMENT_PATTERNS, text)) score -= 1;
+  if (hasAny(BRAND_PATTERNS, text)) score -= 1;
+  if (hasAny(LOW_MARGIN_PATTERNS, text)) score -= 1;
+  if (score >= 3) return "A";
+  if (score >= 1) return "B";
+  return "C";
 }
-
-function classifyIntent(keyword, rule) {
+function recommendationFor({ intent, type, keyword, rating }) {
   const text = normalize(keyword);
-  const desiredIntent = targetIntent(rule);
-  const excluded = firstMatch(DIRECT_EXCLUSION_PATTERNS, text);
-  if (excluded) {
-    return {
-      intent: "其他",
-      firstJudgement: "排除",
-      stop: true,
-      reason: excluded.type
-    };
-  }
-
-  const healthRisk = detectHealthEducationRisk(keyword);
-  if (!healthRisk.matched) {
-    const aiReplaced = firstMatch(SIMPLE_AI_REPLACED_PATTERNS, text);
-    if (aiReplaced) {
-      return {
-        intent: "其他",
-        firstJudgement: "排除",
-        stop: true,
-        reason: `${aiReplaced.type}可被AI直接满足`
-      };
+  if (intent === "排除") return "";
+  if (type === "B端采购") return "做B端询盘页，突出MOQ、定制和报价入口";
+  if (type === "配件耗材") return "优先做配件/耗材独立页，验证SKU和毛利";
+  if (type === "导购评测") return "做内容导购/联盟，承接比较和评测意图";
+  if (type === "品牌商品") return "可做品牌兼容页，但需规避商标和授权风险";
+  if (type === "本地服务") return "偏本地服务，除非客户可履约否则不优先";
+  if (type === "售后信息") return "信息/售后意图偏弱，可作为内容辅助页";
+  if (hasAny(HEAVY_FULFILLMENT_PATTERNS, text)) return "可做电商/导购，但需评估物流售后和认证";
+  return rating === "A" ? "适合电商落地，优先验证供应链和毛利" : "可做电商候选，先验证竞争和毛利";
+}
+export function evaluateKeywordAgentRow(keywordRow, rule = {}) {
+  const keyword = keywordRow?.record?.["关键词"] || keywordRow?.["关键词"] || "";
+  const text = normalize(keyword);
+  const excluded = firstMatch(HARD_EXCLUSION_PATTERNS, text);
+  const type = excluded ? "高风险品类" : productType(keyword);
+  let intent = excluded ? "排除" : purchaseIntent(type, keyword);
+  let status = excluded ? "排除" : "完成";
+  let reason = excluded ? `${excluded.type}，不适合电商或B端关键词机会` : compact([
+    intent === "B端采购" ? "供应商/批发/OEM等B端采购意图" : `${type}，${intent}购买意图`,
+    hasAny(BRAND_PATTERNS, text) ? "包含品牌词，需注意商标/授权风险" : "",
+    hasAny(HEAVY_FULFILLMENT_PATTERNS, text) ? "物流/售后/认证履约偏重" : "",
+    sellableCategories(rule) ? `规则可售品类：${sellableCategories(rule)}` : ""
+  ]);
+  if (!excluded) {
+    const mode = type === "B端采购" ? "B端" : "电商";
+    if (!allowsMode(rule, mode)) {
+      intent = "排除";
+      status = "排除";
+      reason = `真实意图是${mode}，不匹配目标模式${targetModes(rule).join("/")}`;
     }
   }
-
-  const softExclusion = firstMatch(SOFT_EXCLUSION_PATTERNS, text);
-  const actualIntent = detectActualIntent(keyword);
-  if (actualIntent.intent === "其他") {
-    return {
-      intent: "其他",
-      firstJudgement: "排除",
-      stop: true,
-      reason: actualIntent.reason || "不符合客户目标意图",
-      actualIntent: actualIntent.intent
-    };
-  }
-
-  if (actualIntent.intent !== desiredIntent) {
-    return {
-      intent: "其他",
-      firstJudgement: "排除",
-      stop: true,
-      reason: `真实意图是${actualIntent.intent}，不匹配客户目标${desiredIntent}`,
-      actualIntent: actualIntent.intent
-    };
-  }
-
-  return {
-    intent: desiredIntent,
-    firstJudgement: "继续",
-    stop: false,
-    reason: actualIntent.reason || `匹配${desiredIntent}需求`,
-    actualIntent: actualIntent.intent,
-    softExclusion: Boolean(softExclusion),
-    softExclusionReason: softExclusion?.type || ""
+  const rating = ratingFor({ intent, type, keyword });
+  const values = {
+    "购买意图": intent,
+    "产品类型": type,
+    "判断依据": reason,
+    [AGENT_STATUS_COLUMN]: status
   };
+  if (status === "完成") {
+    values["建议"] = recommendationFor({ intent, type, keyword, rating });
+    values["评级"] = rating;
+  }
+  return { values, stopAfterFirstJudgement: status === "排除", summary: reason };
 }
-
-function technicalDifficulty(
-  keyword,
-  financialRisk = { matched: false },
-  healthRisk = { matched: false }
-) {
-  if (financialRisk.matched) {
-    return {
-      level: "中",
-      difficulty: "中：需谨慎设计假设和免责声明",
-      recommended: true,
-      reason: "纯前端估算器可做但需免责声明"
-    };
-  }
-  if (healthRisk.matched) {
-    return {
-      level: "中",
-      difficulty: "中：需谨慎设计假设和免责声明",
-      recommended: true,
-      reason: "纯前端健康估算器可做但需免责声明"
-    };
-  }
-
-  const text = normalize(keyword);
-  if (/\bmap\b/.test(text)) {
-    return {
-      level: "重",
-      difficulty: "重：需地图API/地理编码/数据来源验证",
-      recommended: false,
-      reason: "地图/API/数据来源风险"
-    };
-  }
-  if (/\bupc\b/.test(text)) {
-    return {
-      level: "重",
-      difficulty: "重：需UPC编码规则和数据校验",
-      recommended: false,
-      reason: "UPC编码/校验/数据边界风险"
-    };
-  }
-  if (hasAny(HEAVY_PATTERNS, text)) {
-    return {
-      level: "重",
-      difficulty: "重：依赖AI/第三方/实时能力",
-      recommended: false,
-      reason: "难以仅靠CF边缘轻量交付"
-    };
-  }
-  if (hasAny(LIGHT_PATTERNS, text)) {
-    return {
-      level: "轻",
-      difficulty: "轻：纯前端或Workers可做",
-      recommended: true,
-      reason: "可用静态页/Workers/KV轻量实现"
-    };
-  }
-  return {
-    level: "中",
-    difficulty: "中：需少量数据或模板逻辑",
-    recommended: true,
-    reason: "边缘部署可做但需验证数据来源"
-  };
-}
-
-function abilityMatches(difficulty, rule) {
-  const configuredAbilities = abilities(rule);
-  if (configuredAbilities.length === 0) {
-    return true;
-  }
-  const text = configuredAbilities.join(" ").toLowerCase();
-  if (difficulty.level === "重") {
-    return false;
-  }
-  if (/轻|tool|工具|saas|workers|cf|边缘|批量|b端|展示|询盘|线索|供应商|b2b|enterprise/.test(text)) {
-    return true;
-  }
-  return difficulty.level === "轻";
-}
-
-function chooseMonetization(keyword, { desiredIntent = "工具站", actualIntent = "" } = {}) {
-  if (desiredIntent === "B端展示站" || actualIntent === "B端展示站") {
-    return {
-      channel: "其他",
-      reason: "B端展示站更适合询盘/线索变现"
-    };
-  }
-
-  const text = normalize(keyword);
-  if (hasAny(SAAS_SIGNAL_PATTERNS, text)) {
-    return {
-      channel: "轻saas",
-      reason: "存在保存/批量/导出/API/职业场景信号"
-    };
-  }
-  if (hasAny(HEAVY_PATTERNS, text)) {
-    return {
-      channel: "其他",
-      reason: "变现依赖外部平台或重能力"
-    };
-  }
-  return {
-    channel: "广告",
-    reason: "一次性免费工具更适合广告承接"
-  };
-}
-
-function baseRatingFromDifficulty(difficulty, { softExclusion = false } = {}) {
-  const level = difficulty?.level || "";
-  if (softExclusion) return level === "轻" ? "C" : "排除";
-  if (level === "轻") return "A";
-  if (level === "中") return "B";
-  if (level === "重") return "C";
-  return "B";
-}
-
-function containsCopyrightRiskText(text) {
-  return /版权|授权|官方|copyright|license|licensing|official/i.test(String(text || ""));
-}
-
-function downgradeRatingForRisk(currentRating) {
-  if (currentRating === "A") return "B";
-  if (currentRating === "B") return "C";
-  if (currentRating === "C") return "排除";
-  return currentRating;
-}
-
-function rating(difficulty, { brand = false, recommendation = "", rationale = "", monetization = "", softExclusion = false } = {}) {
-  const baseRating = baseRatingFromDifficulty(difficulty, { softExclusion });
-  const riskText = [recommendation, rationale, monetization].join(" ");
-  const hasRisk = brand || /品牌|商标|误导|同名站|截流|brand|trademark/i.test(riskText) || containsCopyrightRiskText(riskText);
-  return hasRisk ? downgradeRatingForRisk(baseRating) : baseRating;
-}
-
-function buildRecommendation({ keyword, difficulty, monetization, brand, financialRisk, healthRisk, actualIntent }) {
-  const parts = [];
-  if (actualIntent === "B端展示站") {
-    parts.push("做B端展示页，承接询盘线索");
-  } else if (monetization.channel === "轻saas") {
-    parts.push("做免费入口+保存/批量/导出付费");
-  } else if (monetization.channel === "广告") {
-    parts.push("做免费轻工具页承接Bing流量");
-  } else {
-    parts.push("先验证非广告/非SaaS路径");
-  }
-  if (difficulty.level === "重") {
-    parts.push("技术重不适合边缘轻站");
-  }
-  if (financialRisk?.matched) {
-    parts.push("做教育估算器，强化免责声明");
-  }
-  if (healthRisk?.matched) {
-    parts.push("做健康教育估算，避免医疗建议");
-  }
-  if (brand) {
-    parts.push("涉及品牌词需避开商标误导");
-  }
-  if (/citation|mla|apa|chicago|acs|ama|ieee/.test(normalize(keyword))) {
-    parts.push("强化格式模板和导出");
-  }
-  return compactText(parts, 50);
-}
-
-export function evaluateKeywordAgentRow(keywordRow, rule) {
-  const keyword = keywordRow?.record?.["关键词"] || keywordRow?.["关键词"] || "";
-  const intentResult = classifyIntent(keyword, rule);
-  const result = {
-    "意图": intentResult.intent,
-    "第一次判断": intentResult.firstJudgement
-  };
-
-  if (intentResult.stop) {
-    result["判断依据"] = exclusionRationale(keyword, intentResult.reason);
-    result[AGENT_STATUS_COLUMN] = "排除";
-    return {
-      values: result,
-      stopAfterFirstJudgement: true,
-      summary: intentResult.reason
-    };
-  }
-
-  const text = normalize(keyword);
-  const brand = isBrandKeyword(text);
-  const desiredIntent = targetIntent(rule);
-  const actualIntent = intentResult.actualIntent || intentResult.intent;
-  const financialRisk = detectFinancialEducationRisk(keyword);
-  const healthRisk = detectHealthEducationRisk(keyword);
-  const difficulty = technicalDifficulty(keyword, financialRisk, healthRisk);
-  const secondRecommended = difficulty.recommended && abilityMatches(difficulty, rule);
-  const secondJudgement = secondRecommended ? "推荐" : "不推荐";
-  const monetization = chooseMonetization(keyword, { desiredIntent, actualIntent });
-  const channels = parseChannels(rule);
-  const channelAllowed = channels.length === 0 || channels.includes(monetization.channel);
-  const thirdRecommended =
-    (monetization.channel !== "其他" || (desiredIntent === "B端展示站" && actualIntent === "B端展示站")) &&
-    channelAllowed &&
-    secondJudgement === "推荐";
-  const thirdJudgement = thirdRecommended ? "推荐" : "不推荐";
-
-  result["难度"] = difficulty.difficulty;
-  result["第二次判断"] = secondJudgement;
-  result["变现渠道"] = monetization.channel;
-  result["第三次判断"] = thirdJudgement;
-  result["建议"] = buildRecommendation({ keyword, difficulty, monetization, brand, financialRisk, healthRisk, actualIntent });
-  result["判断依据"] = compactText([
-    intentResult.reason,
-    intentResult.softExclusionReason ? `${intentResult.softExclusionReason}，按排除项固定评级C` : "",
-    financialRisk.matched ? financialRisk.rationale : "",
-    healthRisk.matched ? healthRisk.rationale : "",
-    difficulty.reason,
-    monetization.reason,
-    channelAllowed ? "" : "不匹配客户变现渠道",
-    brand ? "品牌词风险" : ""
-  ], 80);
-  const finalRating = rating(difficulty, {
-    brand,
-    recommendation: result["建议"],
-    rationale: result["判断依据"],
-    monetization: monetization.reason,
-    softExclusion: intentResult.softExclusion
-  });
-  if (finalRating === "排除") {
-    result["意图"] = "其他";
-    result["第一次判断"] = "排除";
-    delete result["难度"];
-    delete result["第二次判断"];
-    delete result["变现渠道"];
-    delete result["第三次判断"];
-    delete result["建议"];
-    delete result["评级"];
-    result["判断依据"] = compactText([
-      intentResult.reason,
-      difficulty.reason,
-      intentResult.softExclusion
-        ? brand
-          ? "排除项中重难度且叠加品牌/版权风险，降级排除"
-          : "排除项为中/重难度，降级排除"
-        : brand
-          ? "品牌/版权风险叠加重难度，降级排除"
-          : "版权风险叠加重难度，降级排除"
-    ], 80);
-    result[AGENT_STATUS_COLUMN] = "排除";
-    return {
-      values: result,
-      stopAfterFirstJudgement: true,
-      summary: result["判断依据"]
-    };
-  }
-  result["评级"] = finalRating;
-  result[AGENT_STATUS_COLUMN] = "完成";
-
-  return {
-    values: result,
-    stopAfterFirstJudgement: false,
-    summary: result["判断依据"]
-  };
-}
-
-export function targetAgentColumns() {
-  return [...TARGET_COLUMNS];
-}
+export function targetAgentColumns() { return [...TARGET_COLUMNS]; }
