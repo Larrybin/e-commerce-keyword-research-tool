@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import test from "node:test";
 import { createSheetWriteQueue } from "../src/bing-precheck.mjs";
 import {
-  competitionKeyFromUrl,
+  classifyTopSearchResults,
   evaluateBingPrecheck,
+  evaluateSerpOpportunity,
   parseCompactNumber,
-  sortCountryBreakdown,
-  summarizeTopUrlCompetition
+  sortCountryBreakdown
 } from "../src/lib/bing-precheck.mjs";
 import { keywordResearchUrlMatchesSite } from "../src/lib/bing-page.mjs";
 
@@ -20,8 +21,8 @@ test("parseCompactNumber converts Bing shorthand metrics", () => {
 test("keywordResearchUrlMatchesSite requires the expected siteUrl", () => {
   assert.equal(
     keywordResearchUrlMatchesSite(
-      "https://www.bing.com/webmasters/keywordresearch?siteUrl=https%3A%2F%2F2fafree.com%2F&keyword=test",
-      "https://2fafree.com/"
+      "https://www.bing.com/webmasters/keywordresearch?siteUrl=https%3A%2F%2Fbackwardstextgenerator.com%2F&keyword=test",
+      "https://backwardstextgenerator.com/"
     ),
     true
   );
@@ -34,67 +35,103 @@ test("keywordResearchUrlMatchesSite requires the expected siteUrl", () => {
   );
 });
 
-test("competitionKeyFromUrl keeps root domains and locale paths", () => {
-  assert.equal(competitionKeyFromUrl("https://www.example.com/en"), "example.com/en");
-  assert.equal(competitionKeyFromUrl("https://www.example.com/en/tool"), "");
-  assert.equal(competitionKeyFromUrl("https://barcode-maker.com/"), "barcode-maker.com");
-  assert.equal(competitionKeyFromUrl("https://m.example.co.uk/fr-ca"), "example.co.uk/fr-ca");
-  assert.equal(competitionKeyFromUrl("https://barcodx.com/online-barcode-generator"), "");
-});
-
-test("summarizeTopUrlCompetition counts unique top five competition keys", () => {
-  const result = summarizeTopUrlCompetition([
-    "https://a.com/en/tool",
-    "https://a.com/en/other",
-    "https://a.com/fr",
-    "https://b.com/",
-    "https://c.com/tool",
-    "https://d.com/tool"
-  ]);
-
-  assert.equal(result.count, 2);
-  assert.deepEqual(result.domains, [
-    { domain: "a.com/fr", rank: 3 },
-    { domain: "b.com", rank: 4 }
-  ]);
-});
-
-test("evaluateBingPrecheck rejects when either rule fails", () => {
+test("evaluateBingPrecheck rejects only when impressions miss the minimum", () => {
   assert.equal(
     evaluateBingPrecheck({
       impressions: "999",
-      minImpressions: "1000",
-      top5DomainCount: 2,
-      maxTop5Domains: 2
+      minImpressions: "1000"
     }).judgement,
     "拒绝"
   );
   assert.equal(
     evaluateBingPrecheck({
       impressions: "10K",
-      minImpressions: "1000",
-      top5DomainCount: 3,
-      maxTop5Domains: 2
-    }).judgement,
-    "拒绝"
-  );
-  assert.equal(
-    evaluateBingPrecheck({
-      impressions: "10K",
-      minImpressions: "1000",
-      top5DomainCount: 2,
-      maxTop5Domains: 2
-    }).judgement,
-    "待定"
-  );
-  assert.equal(
-    evaluateBingPrecheck({
-      impressions: "10K",
-      minImpressions: "1000",
-      top5DomainCount: 1,
-      maxTop5Domains: 2
+      minImpressions: "1000"
     }).judgement,
     "继续"
+  );
+  assert.equal(
+    evaluateBingPrecheck({
+      impressions: "499",
+      minImpressions: ""
+    }).judgement,
+    "拒绝"
+  );
+  assert.equal(
+    evaluateBingPrecheck({
+      impressions: "500",
+      minImpressions: ""
+    }).judgement,
+    "继续"
+  );
+});
+
+test("classifyTopSearchResults separates platforms, independent sites, and strong content", () => {
+  const result = classifyTopSearchResults([
+    "https://www.amazon.com/example-product/dp/1",
+    "https://www.walmart.com/ip/example-product/1",
+    "https://smallwidgets.example/buy",
+    "https://www.nytimes.com/wirecutter/reviews/example-product"
+  ]);
+
+  assert.equal(result.platformCount, 2);
+  assert.equal(result.independentSiteCount, 1);
+  assert.equal(result.strongContentCount, 1);
+  assert.equal(result.suspiciousLowAuthorityIndependentSite, "smallwidgets.example");
+});
+
+test("evaluateSerpOpportunity marks independent-site and platform-gap opportunities", () => {
+  assert.deepEqual(
+    evaluateSerpOpportunity(classifyTopSearchResults([
+      "https://smallwidgets.example/buy",
+      "https://www.amazon.com/example-product/dp/1",
+      "https://www.walmart.com/ip/example-product/1",
+      "https://www.ebay.com/itm/1",
+      "https://www.nytimes.com/wirecutter/reviews/example-product",
+      "https://www.tomsguide.com/reviews/example-product",
+      "https://www.cnet.com/reviews/example-product",
+      "https://www.techradar.com/reviews/example-product",
+      "https://www.forbes.com/advisor/example-product",
+      "https://www.consumerreports.org/example-product"
+    ])).judgement,
+    "机会"
+  );
+
+  assert.equal(
+    evaluateSerpOpportunity(classifyTopSearchResults([
+      "https://www.amazon.com/a",
+      "https://www.walmart.com/b",
+      "https://www.ebay.com/c",
+      "https://www.nytimes.com/wirecutter/reviews/a",
+      "https://www.tomsguide.com/reviews/b",
+      "https://www.cnet.com/reviews/c",
+      "https://www.techradar.com/reviews/d",
+      "https://www.forbes.com/advisor/e",
+      "https://www.consumerreports.org/f",
+      "https://www.goodhousekeeping.com/g"
+    ])).judgement,
+    "机会"
+  );
+
+  assert.equal(
+    evaluateSerpOpportunity(classifyTopSearchResults([
+      "https://www.nytimes.com/wirecutter/reviews/a",
+      "https://www.tomsguide.com/reviews/b",
+      "https://www.cnet.com/reviews/c",
+      "https://www.techradar.com/reviews/d",
+      "https://www.forbes.com/advisor/e",
+      "https://www.consumerreports.org/f",
+      "https://www.goodhousekeeping.com/g",
+      "https://www.bobvila.com/h",
+      "https://www.thespruce.com/i",
+      "https://www.pcmag.com/j"
+    ])).judgement,
+    "待定"
+  );
+
+  assert.equal(
+    evaluateSerpOpportunity(classifyTopSearchResults([])).judgement,
+    "待定"
   );
 });
 
@@ -131,4 +168,15 @@ test("createSheetWriteQueue batches row writes before flushing", () => {
   queue.enqueueRow({ rowNumber: 6, headers: ["词根", "关键词"], values: ["root", "keyword 2"] });
   assert.equal(queue.pendingCount(), 2);
   assert.equal(queue.shouldFlush(), true);
+});
+
+test("Bing writers no longer reference legacy top5 SERP columns", async () => {
+  const files = [
+    new URL("../src/bing-precheck.mjs", import.meta.url),
+    new URL("../src/bing-hubstudio-serp.mjs", import.meta.url)
+  ];
+  for (const file of files) {
+    const source = await fs.readFile(file, "utf8");
+    assert.doesNotMatch(source, /top5根域名数量|根域名1|根域名1排名|根域名2|根域名2排名/);
+  }
 });

@@ -174,6 +174,22 @@ export async function getSheetValues({ sheetUrl, range, keyPath = "" }) {
   };
 }
 
+export async function getSpreadsheetSheets({ sheetUrl, keyPath = "" }) {
+  const result = await sheetsApiFetch({
+    sheetUrl,
+    keyPath,
+    path: "?fields=sheets.properties"
+  });
+  if (!result.ok) {
+    return result;
+  }
+  return {
+    ok: true,
+    sheets: result.data.sheets || [],
+    clientEmail: result.clientEmail
+  };
+}
+
 export async function updateSheetValues({
   sheetUrl,
   range,

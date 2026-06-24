@@ -29,13 +29,14 @@ export function taskRunKey(task) {
   return `${rowPrefix}${task.mode}-${task.query}`.replace(/[^a-z0-9_-]+/gi, "-").toLowerCase();
 }
 
-export function toOutputRows(rows, { country = "" } = {}) {
+export function toOutputRows(rows, { country = "", source = "" } = {}) {
   return rows.map((row) => ({
     词根: row.root,
     关键词: row.keyword,
     国家: country || row.country || row.国家 || "",
     搜索量: row.volume,
     KD: row.kd,
+    来源: source || row.来源 || "semrush",
     semrush_page: row.semrush_page
   }));
 }

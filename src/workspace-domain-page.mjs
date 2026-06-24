@@ -21,6 +21,10 @@ import {
   getRequiredValueByAliases
 } from "./lib/tool-config.mjs";
 import {
+  KEYWORD_TOTAL_READ_COLUMNS,
+  KEYWORD_TOTAL_SHEET
+} from "./lib/sheet-write.mjs";
+import {
   getSpreadsheetId,
   readSheetInSession
 } from "./lib/google-sheet.mjs";
@@ -44,7 +48,6 @@ import {
 const DEFAULT_BUSINESS_NAME = "compound interest calculator";
 const DEFAULT_REGION = "Türkiye";
 const DEFAULT_OUTPUT = "output/workspace-domain-page.json";
-const DEFAULT_KEYWORD_SHEET = "关键词总表";
 const DOMAIN_RECOMMENDATION_HEADER = "域名推荐";
 const DOMAIN_PRICE_HEADER = "价格";
 
@@ -496,7 +499,7 @@ function quoteSheetName(sheetName) {
 async function readKeywordTable({ sheetUrl, keywordSheet }) {
   const result = await getSheetValues({
     sheetUrl,
-    range: `${keywordSheet}!A:ZZ`
+    range: `${keywordSheet}!${KEYWORD_TOTAL_READ_COLUMNS}`
   });
   if (!result.ok) {
     throw new Error(`读取 ${keywordSheet} 失败: ${result.reason || result.status || "unknown_error"}`);
@@ -797,7 +800,7 @@ async function runDomainResearch({
 async function main() {
   const sheetUrl = readArg("sheet", process.env.GOOGLE_SHEET_URL || DEFAULT_SHEET_URL);
   const accountSheetName = readArg("account-sheet", "工具账号密码");
-  const keywordSheet = readArg("keyword-sheet", DEFAULT_KEYWORD_SHEET);
+  const keywordSheet = readArg("keyword-sheet", KEYWORD_TOTAL_SHEET);
   const startUrl = readArg("start-url", WORKSPACE_BUSINESS_URL);
   const businessName = readArg("business-name", DEFAULT_BUSINESS_NAME);
   const region = readArg("region", DEFAULT_REGION);

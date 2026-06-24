@@ -6,9 +6,12 @@ import { readArg, readFlag } from "./lib/args.mjs";
 import { getRelatedKeywords, readBingWebmasterApiKey } from "./lib/bing-webmaster-api.mjs";
 import { getSheetValues } from "./lib/google-sheets-api.mjs";
 import { DEFAULT_SHEET_URL } from "./lib/tool-config.mjs";
+import {
+  KEYWORD_TOTAL_SHEET,
+  keywordTotalReadRange
+} from "./lib/sheet-write.mjs";
 
 const ACCOUNT_SHEET = "工具账号密码";
-const KEYWORD_TOTAL_SHEET = "关键词总表";
 
 function rowToObject(headers, row) {
   return Object.fromEntries(headers.map((header, index) => [header, row?.[index] || ""]));
@@ -57,6 +60,7 @@ function readBingAccounts(accountTable, requestedAccount) {
 
 function selectRows(keywordTable, { fromRow, toRow, limit }) {
   const keywordIndex = headerIndex(keywordTable.headers, "关键词");
+  const prefilterIndex = headerIndex(keywordTable.headers, "agent预判断");
   const bingJudgementIndex = headerIndex(keywordTable.headers, "bing初步判断");
   const selected = [];
   for (const row of keywordTable.rows) {
@@ -67,8 +71,12 @@ function selectRows(keywordTable, { fromRow, toRow, limit }) {
       break;
     }
     const keyword = String(row.values[keywordIndex] || "").trim();
+    const prefilter = String(row.values[prefilterIndex] || "").trim();
     const bingJudgement = String(row.values[bingJudgementIndex] || "").trim();
     if (!keyword) {
+      continue;
+    }
+    if (prefilter !== "继续") {
       continue;
     }
     if (bingJudgement !== "继续") {
@@ -165,7 +173,7 @@ async function main() {
 
   const [accountTable, keywordTable] = await Promise.all([
     readRequiredSheet(sheetUrl, `${ACCOUNT_SHEET}!A:Z`),
-    readRequiredSheet(sheetUrl, `${KEYWORD_TOTAL_SHEET}!A:AZ`)
+    readRequiredSheet(sheetUrl, keywordTotalReadRange())
   ]);
   const accounts = readBingAccounts(accountTable, requestedBingAccount);
   const rows = selectRows(keywordTable, { fromRow, toRow, limit });

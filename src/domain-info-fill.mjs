@@ -15,6 +15,10 @@ import { batchUpdateSheetValues, getSheetValues } from "./lib/google-sheets-api.
 import { columnName, headerIndex, valuesToTable } from "./lib/table-utils.mjs";
 import { DEFAULT_SHEET_URL } from "./lib/tool-config.mjs";
 import {
+  KEYWORD_TOTAL_READ_COLUMNS,
+  KEYWORD_TOTAL_SHEET
+} from "./lib/sheet-write.mjs";
+import {
   buildDomainInfoStatusUpdates,
   buildDomainInfoValues,
   DOMAIN_INFO_HEADERS,
@@ -25,7 +29,6 @@ import {
 } from "./lib/domain-info-fill.mjs";
 
 const TASK_SHEET = "词根拓展";
-const KEYWORD_SHEET = "关键词总表";
 const DOMAIN_INFO_SHEET = "域名信息补全";
 const DOMAIN_INFO_STATUS_HEADER = "域名信息补全";
 const ADDRESS_URL = "https://www.meiguodizhi.com/tr-address";
@@ -250,12 +253,12 @@ async function main() {
   const writeDelayMs = Number(readArg("write-delay-ms", "1200"));
 
   const [keywordTable, domainInfoTable, taskTable] = await Promise.all([
-    readTable({ sheetUrl, sheetName: KEYWORD_SHEET }),
+    readTable({ sheetUrl, sheetName: KEYWORD_TOTAL_SHEET, range: KEYWORD_TOTAL_READ_COLUMNS }),
     readTable({ sheetUrl, sheetName: DOMAIN_INFO_SHEET }),
     readTable({ sheetUrl, sheetName: TASK_SHEET })
   ]);
 
-  validateHeaders(KEYWORD_SHEET, keywordTable.headers, ["词根", "关键词", "评级", "域名推荐"]);
+  validateHeaders(KEYWORD_TOTAL_SHEET, keywordTable.headers, ["词根", "关键词", "评级", "域名推荐"]);
   validateHeaders(DOMAIN_INFO_SHEET, domainInfoTable.headers, DOMAIN_INFO_HEADERS);
   validateHeaders(TASK_SHEET, taskTable.headers, ["词根", "关键词", DOMAIN_INFO_STATUS_HEADER]);
 
@@ -322,7 +325,7 @@ async function main() {
   const summary = {
     source: {
       sheetUrl,
-      keywordSheet: KEYWORD_SHEET,
+      keywordSheet: KEYWORD_TOTAL_SHEET,
       domainInfoSheet: DOMAIN_INFO_SHEET,
       taskSheet: TASK_SHEET,
       dryRun,

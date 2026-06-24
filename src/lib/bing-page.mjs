@@ -1,7 +1,7 @@
 import { evaluate, navigateAndWait } from "./cdp.mjs";
 import { sleep, waitForCondition } from "./browser-actions.mjs";
 
-export function buildBingKeywordResearchUrl(siteUrl = "https://2fafree.com/", keyword = "") {
+export function buildBingKeywordResearchUrl(siteUrl = "https://backwardstextgenerator.com/", keyword = "") {
   const url = new URL("https://www.bing.com/webmasters/keywordresearch");
   if (siteUrl) {
     url.searchParams.set("siteUrl", siteUrl);
@@ -12,7 +12,7 @@ export function buildBingKeywordResearchUrl(siteUrl = "https://2fafree.com/", ke
   return url.toString();
 }
 
-export function keywordResearchUrlMatchesSite(url, siteUrl = "https://2fafree.com/") {
+export function keywordResearchUrlMatchesSite(url, siteUrl = "https://backwardstextgenerator.com/") {
   try {
     const parsed = new URL(url);
     return parsed.hostname === "www.bing.com" &&
@@ -74,7 +74,7 @@ export async function waitForBingKeywordResearchReady(cdp, sessionId) {
   }
 }
 
-export async function searchBingKeyword(cdp, sessionId, keyword, siteUrl = "https://2fafree.com/") {
+export async function searchBingKeyword(cdp, sessionId, keyword, siteUrl = "https://backwardstextgenerator.com/") {
   await waitForBingKeywordResearchReady(cdp, sessionId);
   const submitted = await evaluate(
     cdp,

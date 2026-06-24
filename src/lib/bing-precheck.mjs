@@ -1,6 +1,66 @@
-const LOCALE_SEGMENT = /^(?:[a-z]{2})(?:-[a-z]{2})?$/i;
-
 const COMMON_PREFIXES = new Set(["www", "m"]);
+const LARGE_PLATFORM_HOSTS = new Set([
+  "amazon.com",
+  "walmart.com",
+  "ebay.com",
+  "aliexpress.com",
+  "etsy.com",
+  "temu.com",
+  "target.com",
+  "costco.com",
+  "bestbuy.com",
+  "homedepot.com",
+  "lowes.com",
+  "wayfair.com",
+  "shein.com",
+  "shopify.com",
+  "youtube.com",
+  "reddit.com",
+  "pinterest.com",
+  "facebook.com",
+  "instagram.com",
+  "tiktok.com"
+]);
+const STRONG_VERTICAL_ECOMMERCE_HOSTS = new Set([
+  "grainger.com",
+  "mcmaster.com",
+  "uline.com",
+  "zoro.com",
+  "webstaurantstore.com",
+  "newegg.com",
+  "bhphotovideo.com",
+  "reverb.com",
+  "chewy.com",
+  "tractorsupply.com"
+]);
+const STRONG_CONTENT_HOSTS = new Set([
+  "nytimes.com",
+  "wirecutter.com",
+  "forbes.com",
+  "consumerreports.org",
+  "goodhousekeeping.com",
+  "bobvila.com",
+  "thespruce.com",
+  "cnet.com",
+  "pcmag.com",
+  "techradar.com",
+  "tomsguide.com",
+  "wikipedia.org",
+  "quora.com"
+]);
+const BRAND_OFFICIAL_HOSTS = new Set([
+  "apple.com",
+  "samsung.com",
+  "dyson.com",
+  "nike.com",
+  "adidas.com",
+  "sony.com",
+  "lg.com",
+  "panasonic.com",
+  "whirlpool.com",
+  "geappliances.com"
+]);
+const DEFAULT_BING_MIN_IMPRESSIONS = "500";
 
 export function parseCompactNumber(value) {
   const text = String(value || "")
@@ -45,42 +105,67 @@ export function rootHost(hostname) {
   return parts.join(".");
 }
 
-export function competitionKeyFromUrl(url) {
+function hostMatches(host, domains) {
+  return [...domains].some((domain) => host === domain || host.endsWith(`.${domain}`));
+}
+
+export function classifySearchResultUrl(url) {
   try {
     const parsed = new URL(url);
     const host = rootHost(parsed.hostname);
-    const segments = parsed.pathname.split("/").filter(Boolean);
-    if (segments.length === 0) {
-      return host;
+    if (!host) {
+      return { url, host: "", type: "无法分类" };
     }
-    const firstSegment = segments[0] || "";
-    if (segments.length === 1 && LOCALE_SEGMENT.test(firstSegment)) {
-      return `${host}/${firstSegment.toLowerCase()}`;
+    if (hostMatches(host, LARGE_PLATFORM_HOSTS)) {
+      return { url, host, type: "大平台" };
     }
-    return "";
+    if (hostMatches(host, BRAND_OFFICIAL_HOSTS)) {
+      return { url, host, type: "品牌官网" };
+    }
+    if (hostMatches(host, STRONG_VERTICAL_ECOMMERCE_HOSTS)) {
+      return { url, host, type: "强垂直电商" };
+    }
+    if (hostMatches(host, STRONG_CONTENT_HOSTS)) {
+      return { url, host, type: "强内容站" };
+    }
+    return { url, host, type: "独立站" };
   } catch {
-    return "";
+    return { url, host: "", type: "无法分类" };
   }
 }
 
-export function summarizeTopUrlCompetition(urls, limit = 5) {
-  const domains = [];
-  const seen = new Set();
-  urls.slice(0, limit).forEach((url, index) => {
-    const key = competitionKeyFromUrl(url);
-    if (!key || seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    domains.push({
-      domain: key,
-      rank: index + 1
-    });
-  });
+export function classifyTopSearchResults(urls, limit = 10) {
+  const results = urls.slice(0, limit).map(classifySearchResultUrl);
+  const independentHosts = [...new Set(results
+    .filter((result) => result.type === "独立站")
+    .map((result) => result.host)
+    .filter(Boolean))];
+  const countType = (type) => results.filter((result) => result.type === type).length;
   return {
-    count: domains.length,
-    domains
+    resultCount: results.length,
+    incomplete: results.length < limit,
+    results,
+    platformCount: countType("大平台"),
+    independentSiteCount: independentHosts.length,
+    brandOfficialCount: countType("品牌官网"),
+    strongVerticalEcommerceCount: countType("强垂直电商"),
+    strongContentCount: countType("强内容站"),
+    unclassifiedCount: countType("无法分类"),
+    suspiciousLowAuthorityIndependentSite: independentHosts[0] || ""
   };
+}
+
+export function evaluateSerpOpportunity(serp) {
+  if (serp.incomplete || serp.unclassifiedCount > 0) {
+    return { judgement: "待定", pattern: "结果不完整/无法分类" };
+  }
+  if (serp.suspiciousLowAuthorityIndependentSite) {
+    return { judgement: "机会", pattern: "有疑似低权重独立站" };
+  }
+  if (serp.platformCount >= 3 && serp.independentSiteCount === 0) {
+    return { judgement: "机会", pattern: "大平台霸屏缺独立站" };
+  }
+  return { judgement: "待定", pattern: "强站为主" };
 }
 
 export function sortCountryBreakdown(rows) {
@@ -98,36 +183,20 @@ export function sortCountryBreakdown(rows) {
 
 export function evaluateBingPrecheck({
   impressions,
-  minImpressions,
-  top5DomainCount,
-  maxTop5Domains
+  minImpressions
 }) {
   const impressionsNumber = parseCompactNumber(impressions);
-  const minImpressionsNumber = parseCompactNumber(minImpressions);
-  const domainCountNumber = Number(top5DomainCount);
-  const maxDomainNumber = Number(maxTop5Domains);
+  const minImpressionsNumber = parseCompactNumber(minImpressions || DEFAULT_BING_MIN_IMPRESSIONS);
 
   const impressionFailed =
     minImpressionsNumber !== null &&
     impressionsNumber !== null &&
     impressionsNumber < minImpressionsNumber;
-  const top5DomainFailed =
-    Number.isFinite(domainCountNumber) &&
-    Number.isFinite(maxDomainNumber) &&
-    domainCountNumber > maxDomainNumber;
-  const top5DomainPending =
-    !top5DomainFailed &&
-    Number.isFinite(domainCountNumber) &&
-    domainCountNumber === 2;
 
   return {
-    judgement: impressionFailed || top5DomainFailed ? "拒绝" : top5DomainPending ? "待定" : "继续",
+    judgement: impressionFailed ? "拒绝" : "继续",
     impressionFailed,
-    top5DomainFailed,
-    top5DomainPending,
     impressionsNumber,
-    minImpressionsNumber,
-    domainCountNumber,
-    maxDomainNumber
+    minImpressionsNumber
   };
 }

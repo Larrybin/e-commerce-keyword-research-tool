@@ -12,7 +12,11 @@ import {
 import { sleep } from "./lib/browser-actions.mjs";
 import { runBingWebmasterAuthFlow } from "./lib/bing-webmaster-auth.mjs";
 import { searchBingKeyword, waitForBingKeywordResearchReady } from "./lib/bing-page.mjs";
-import { evaluateBingPrecheck, formatInteger, summarizeTopUrlCompetition } from "./lib/bing-precheck.mjs";
+import {
+  classifyTopSearchResults,
+  evaluateSerpOpportunity,
+  formatInteger
+} from "./lib/bing-precheck.mjs";
 import { readArg, readFlag } from "./lib/args.mjs";
 import { readFeishuBingRegistry } from "./lib/feishu-registry.mjs";
 import {
@@ -34,12 +38,14 @@ import {
 } from "./lib/hubstudio-api.mjs";
 import { formatCellBackgrounds, getSheetValues, updateSheetValues } from "./lib/google-sheets-api.mjs";
 import { DEFAULT_SHEET_URL } from "./lib/tool-config.mjs";
+import {
+  KEYWORD_TOTAL_SHEET,
+  keywordTotalReadRange
+} from "./lib/sheet-write.mjs";
 import { columnName, headerIndex, optionalHeaderIndex, valuesToTable } from "./lib/table-utils.mjs";
 import { writeJson } from "./lib/files.mjs";
 import { readHubstudioFingerprintCache } from "./lib/hubstudio-api.mjs";
 
-const TASK_SHEET = "词根拓展";
-const KEYWORD_TOTAL_SHEET = "关键词总表";
 const BING_WEBMASTER_HOME_URL = "https://www.bing.com/webmasters/";
 const BING_KEYWORD_RESEARCH_ENTRY_URL = "https://www.bing.com/webmasters/keywordresearch";
 
@@ -134,44 +140,21 @@ async function readHubstudioFingerprintsWithFallback({ startFingerprintName = ""
   }
 }
 
-function buildRuleIndex(taskTable) {
-  const rootRules = new Map();
-  const keywordRules = new Map();
-  for (const row of taskTable.rows) {
-    const root = String(row.record["词根"] || "").trim();
-    const keyword = String(row.record["关键词"] || "").trim();
-    if (root) rootRules.set(root.toLowerCase(), row);
-    if (keyword) keywordRules.set(keyword.toLowerCase(), row);
-  }
-  return { rootRules, keywordRules };
-}
-
-function findRuleForKeywordRow(keywordRow, ruleIndex) {
-  const root = String(keywordRow.record["词根"] || "").trim();
-  const keyword = String(keywordRow.record["关键词"] || "").trim();
-  const rule = root
-    ? ruleIndex.rootRules.get(root.toLowerCase())
-    : ruleIndex.keywordRules.get(keyword.toLowerCase());
-  if (!rule) {
-    const source = root ? `词根=${root}` : `关键词=${keyword}`;
-    throw new Error(`Bing 规则不存在: ${KEYWORD_TOTAL_SHEET} 第 ${keywordRow.rowNumber} 行 ${source}`);
-  }
-  return rule;
-}
-
 function selectRows(keywordTable, { fromRow, toRow, force }) {
+  const prefilterIndex = headerIndex(keywordTable.headers, "agent预判断", KEYWORD_TOTAL_SHEET);
   const judgementIndex = headerIndex(keywordTable.headers, "判断", KEYWORD_TOTAL_SHEET);
   const bingFirstIndex = headerIndex(keywordTable.headers, "bing初步判断", KEYWORD_TOTAL_SHEET);
-  const bingSecondIndex = optionalHeaderIndex(keywordTable.headers, "bing二次判断");
+  const serpOpportunityIndex = optionalHeaderIndex(keywordTable.headers, "SERP机会判断");
   const selected = [];
   for (const row of keywordTable.rows) {
     if (fromRow && row.rowNumber < fromRow) continue;
     if (toRow && row.rowNumber > toRow) break;
+    const prefilter = String(row.values[prefilterIndex] || "").trim();
     const judgement = String(row.values[judgementIndex] || "").trim();
     const bingFirst = String(row.values[bingFirstIndex] || "").trim();
-    const bingSecond = bingSecondIndex === -1 ? "" : String(row.values[bingSecondIndex] || "").trim();
-    if (judgement !== "继续" || bingFirst !== "继续") continue;
-    if (bingSecond && !force) continue;
+    const serpOpportunity = serpOpportunityIndex === -1 ? "" : String(row.values[serpOpportunityIndex] || "").trim();
+    if (prefilter !== "继续" || judgement !== "继续" || bingFirst !== "继续") continue;
+    if (serpOpportunity && !force) continue;
     selected.push(row);
   }
   return selected;
@@ -179,23 +162,19 @@ function selectRows(keywordTable, { fromRow, toRow, force }) {
 
 function buildChromeValues(headers, keywordRow, precheck, competition) {
   const values = [...keywordRow.values];
-  const set = (header, value) => {
-    values[headerIndex(headers, header, KEYWORD_TOTAL_SHEET)] = value;
+  const set = (header, value, { required = false } = {}) => {
+    const index = required
+      ? headerIndex(headers, header, KEYWORD_TOTAL_SHEET)
+      : optionalHeaderIndex(headers, header);
+    if (index !== -1) {
+      values[index] = value;
+    }
   };
-  set("top5根域名数量", String(competition.count));
-  set("bing二次判断", precheck.judgement);
-  if (precheck.judgement !== "拒绝") {
-    const domains = competition.domains.slice(0, 2);
-    set("根域名1", domains[0]?.domain || "");
-    set("根域名1排名", domains[0]?.rank ? String(domains[0].rank) : "");
-    set("根域名2", domains[1]?.domain || "");
-    set("根域名2排名", domains[1]?.rank ? String(domains[1].rank) : "");
-  } else {
-    set("根域名1", "");
-    set("根域名1排名", "");
-    set("根域名2", "");
-    set("根域名2排名", "");
-  }
+  set("SERP机会判断", precheck.judgement, { required: true });
+  set("top10大平台数", String(competition.platformCount));
+  set("top10独立站数", String(competition.independentSiteCount));
+  set("疑似低权重独立站", competition.suspiciousLowAuthorityIndependentSite);
+  set("SERP格局", precheck.pattern);
   return values;
 }
 
@@ -228,7 +207,7 @@ async function maximizeChromeWindow(cdp, targetId) {
   }
 }
 
-async function extractTop5UrlsFromBingDom(cdp, sessionId) {
+async function extractTop10UrlsFromBingDom(cdp, sessionId) {
   for (let attempt = 1; attempt <= 24; attempt += 1) {
     const result = await evaluate(
       cdp,
@@ -281,7 +260,7 @@ async function extractTop5UrlsFromBingDom(cdp, sessionId) {
             .map(linkValue);
         }
         if (urls.length > 0) {
-          return { urls: [...new Set(urls)].slice(0, 5), foundHeading: true };
+          return { urls: [...new Set(urls)].slice(0, 10), foundHeading: true };
         }
 
         const scrollTargets = [
@@ -780,9 +759,8 @@ async function main() {
   const force = readFlag("force");
   const outDir = readArg("out-dir", "output/bing-hubstudio-serp");
 
-  const [taskTable, keywordTable, fingerprints] = await Promise.all([
-    readRequiredSheet(sheetUrl, `${TASK_SHEET}!A:Z`),
-    readRequiredSheet(sheetUrl, `${KEYWORD_TOTAL_SHEET}!A:AZ`),
+  const [keywordTable, fingerprints] = await Promise.all([
+    readRequiredSheet(sheetUrl, keywordTotalReadRange()),
     readHubstudioFingerprintsWithFallback({ startFingerprintName, fingerprintLimit })
   ]);
   if (fingerprints.length === 0) {
@@ -790,7 +768,6 @@ async function main() {
   }
 
   const rows = selectRows(keywordTable, { fromRow, toRow, force });
-  const ruleIndex = buildRuleIndex(taskTable);
   const hubConfig = readHubstudioConfig();
   const proxyRegions = readArg("proxy-regions", (hubConfig.proxy?.regions || []).join(","))
     .split(",")
@@ -871,7 +848,6 @@ async function main() {
   try {
     for (const keywordRow of rows) {
       const keyword = String(keywordRow.record["关键词"] || "").trim();
-      const rule = findRuleForKeywordRow(keywordRow, ruleIndex);
       let handled = false;
       for (let attempt = 1; attempt <= rowRetries && !handled; attempt += 1) {
         try {
@@ -880,18 +856,13 @@ async function main() {
             topUrlEmptyAttemptsOnFingerprint = 0;
           }
           await searchBingKeyword(session.cdp, session.page.sessionId, keyword, session.activeSiteUrl);
-          const topUrls = await extractTop5UrlsFromBingDom(session.cdp, session.page.sessionId);
+          const topUrls = await extractTop10UrlsFromBingDom(session.cdp, session.page.sessionId);
           if (topUrls.length === 0) {
             throw new Error(`BING_TOP_URLS_EMPTY: ${keyword}`);
           }
 
-          const competition = summarizeTopUrlCompetition(topUrls, 5);
-          const precheck = evaluateBingPrecheck({
-            impressions: "",
-            minImpressions: "",
-            top5DomainCount: competition.count,
-            maxTop5Domains: rule.record["Max root on Bing top 5url"] || ""
-          });
+          const competition = classifyTopSearchResults(topUrls, 10);
+          const precheck = evaluateSerpOpportunity(competition);
           const values = buildChromeValues(keywordTable.headers, keywordRow, precheck, competition);
           await writeKeywordTotalRow({
             sheetUrl,
@@ -900,22 +871,23 @@ async function main() {
             values
           });
 
-          const top5Cell = { row: keywordRow.rowNumber, column: headerIndex(keywordTable.headers, "top5根域名数量", KEYWORD_TOTAL_SHEET) };
+          const serpCellHeader = optionalHeaderIndex(keywordTable.headers, "SERP格局") === -1 ? "SERP机会判断" : "SERP格局";
+          const serpCell = { row: keywordRow.rowNumber, column: headerIndex(keywordTable.headers, serpCellHeader, KEYWORD_TOTAL_SHEET) };
           await formatCellBackgrounds({
             sheetUrl,
             sheetId: keywordTotalGid,
-            cells: [top5Cell],
+            cells: [serpCell],
             color: { red: 1, green: 1, blue: 1 }
           }).catch(() => {});
           await formatCellBackgrounds({
             sheetUrl,
             sheetId: keywordTotalGid,
-            cells: precheck.top5DomainFailed ? [top5Cell] : []
+            cells: []
           }).catch(() => {});
           await formatCellBackgrounds({
             sheetUrl,
             sheetId: keywordTotalGid,
-            cells: precheck.top5DomainPending ? [top5Cell] : [],
+            cells: precheck.judgement === "待定" ? [serpCell] : [],
             color: { red: 1, green: 0.9, blue: 0 }
           }).catch(() => {});
 
@@ -928,12 +900,14 @@ async function main() {
             fingerprint: activeFingerprint.fingerprintName,
             proxyRegion: session.proxyRegion || "",
             judgement: precheck.judgement,
-            top5DomainCount: competition.count,
-            domains: competition.domains.slice(0, 2),
+            top10PlatformCount: competition.platformCount,
+            top10IndependentSiteCount: competition.independentSiteCount,
+            suspiciousLowAuthorityIndependentSite: competition.suspiciousLowAuthorityIndependentSite,
+            serpPattern: precheck.pattern,
             urls: topUrls
           };
           summaries.push(summary);
-          console.log(`Row ${keywordRow.rowNumber}: ${keyword} -> ${precheck.judgement}, top5=${competition.count}, fp=${activeFingerprint.fingerprintName}`);
+          console.log(`Row ${keywordRow.rowNumber}: ${keyword} -> ${precheck.judgement}, platform=${competition.platformCount}, independent=${competition.independentSiteCount}, fp=${activeFingerprint.fingerprintName}`);
           if (rowDelayMs > 0) {
             await sleep(rowDelayMs);
           }

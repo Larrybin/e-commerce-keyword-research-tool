@@ -2,144 +2,87 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readArg } from "./lib/args.mjs";
+import { findChromeProfile } from "./lib/chrome-profiles.mjs";
+import { rowsToObjects } from "./lib/csv.mjs";
+import { buildCsvUrl, getGid } from "./lib/google-sheet.mjs";
+import { getSheetValues } from "./lib/google-sheets-api.mjs";
 import {
-  ensureChromeProfileTargetWithCdp,
-  findChromeProfile
-} from "./lib/chrome-profiles.mjs";
-import {
-  attachChromePage,
-  CdpClient,
-  createChromePage,
-  detachChromePage,
-  navigateAndWait,
-  readChromeWebSocketEndpoint
-} from "./lib/cdp.mjs";
-import {
-  getGid,
-  getSpreadsheetId,
-  readSheetInSession
-} from "./lib/google-sheet.mjs";
+  DEFAULT_SHEET_URL,
+  getRequiredValueByAliases,
+  redactSecrets
+} from "./lib/tool-config.mjs";
 
-const DEFAULT_SHEET_URL =
-  "https://docs.google.com/spreadsheets/d/1Ea3mSRW431QP08sq9tn3VoYEkj52hNRzY_GVizVLy3A/edit?gid=0#gid=0";
+function quoteSheetName(sheetName) {
+  return `'${String(sheetName).replaceAll("'", "''")}'`;
+}
 
-function buildProfileWorkUrl(sheetUrl) {
-  const url = new URL(sheetUrl);
-  const marker = `keyword-tool-${Date.now()}`;
-  url.searchParams.set("keyword_tool_run", marker);
-  url.hash = `${url.hash.replace(/^#/, "") || `gid=${getGid(sheetUrl)}`}&${marker}`;
+async function readSheetWithApi({ sheetUrl, sheetName, expectedHeaders = [] }) {
+  const result = await getSheetValues({
+    sheetUrl,
+    range: `${quoteSheetName(sheetName)}!A:Z`
+  });
+  if (!result.ok) {
+    throw new Error(`读取 ${sheetName} 失败: ${result.reason || "unknown error"}`);
+  }
+
+  const rawRows = result.values || [];
+  const headers = rawRows[0] || [];
+  const missing = expectedHeaders.filter((header) => !headers.includes(header));
+  if (missing.length > 0) {
+    throw new Error(`${sheetName} 表头缺失: ${missing.join(", ")}. 当前表头: ${headers.join(", ")}`);
+  }
+
   return {
-    marker,
-    url: url.toString()
+    range: result.range,
+    csvUrl: buildCsvUrl({ sheetUrl, sheetName }),
+    headers,
+    rows: rowsToObjects(rawRows),
+    rawRows,
+    clientEmail: result.clientEmail
   };
 }
 
-function getRequiredValue(record, key) {
-  const value = record?.[key]?.trim();
-  if (!value) {
-    throw new Error(`Missing required value in Google Sheet: ${key}`);
-  }
-  return value;
-}
-
-function getRequiredValueByAliases(record, aliases) {
-  for (const key of aliases) {
-    const value = record?.[key]?.trim();
-    if (value) {
-      return value;
-    }
-  }
-  throw new Error(`Missing required value in Google Sheet. Tried columns: ${aliases.join(", ")}`);
-}
-
-function redactSecrets(rows) {
-  return rows.map((row) =>
-    Object.fromEntries(
-      Object.entries(row).map(([key, value]) => [
-        key,
-        /密码|password/i.test(key) && value ? "***" : value
-      ])
-    )
-  );
-}
-
-async function main() {
-  const sheetUrl = readArg("sheet", process.env.GOOGLE_SHEET_URL || DEFAULT_SHEET_URL);
-  const gid = readArg("gid", process.env.GOOGLE_SHEET_GID || getGid(sheetUrl));
-  const accountSheetName = readArg("account-sheet", "工具账号密码");
-  const keywordSheetName = readArg("keyword-sheet", "词根拓展");
-  const output = readArg("out", "output/google-sheet-input.json");
-
-  const cdp = new CdpClient(readChromeWebSocketEndpoint());
-  await cdp.connect();
-
-  let bootstrapPage;
-  let closeBootstrapPage = false;
-  let targetPage;
-  let accountSheet;
-  let keywordSheet;
-  let toolAccount;
-  let browserAccount;
-  let chromeProfile;
-
+function resolveChromeProfile(findProfile, browserAccount) {
   try {
-    const spreadsheetId = getSpreadsheetId(sheetUrl);
-    const { targetInfos = [] } = await cdp.send("Target.getTargets");
-    const existingSheetTarget = targetInfos.find(
-      (target) =>
-        target.type === "page" &&
-        target.url.includes(`/spreadsheets/d/${spreadsheetId}`)
-    );
-
-    if (existingSheetTarget) {
-      bootstrapPage = await attachChromePage(cdp, existingSheetTarget.targetId);
-    } else {
-      bootstrapPage = await createChromePage(cdp);
-      closeBootstrapPage = true;
-      await navigateAndWait(cdp, bootstrapPage.sessionId, "https://docs.google.com/", 30000);
-    }
-
-    accountSheet = await readSheetInSession({
-      cdp,
-      sessionId: bootstrapPage.sessionId,
-      sheetUrl,
-      sheetName: accountSheetName,
-      expectedHeaders: ["semrush账号", "semrush密码"]
-    });
-
-    toolAccount = accountSheet.rows[0] || {};
-    browserAccount = getRequiredValueByAliases(toolAccount, [
-      "运行浏览器账号",
-      "运行浏览器的账号"
-    ]);
-    chromeProfile = findChromeProfile(browserAccount);
-
-    const workUrl = buildProfileWorkUrl(sheetUrl);
-    const target = await ensureChromeProfileTargetWithCdp(cdp, chromeProfile, workUrl.url);
-    targetPage = await attachChromePage(cdp, target.targetId);
-
-    keywordSheet = await readSheetInSession({
-      cdp,
-      sessionId: targetPage.sessionId,
-      sheetUrl,
-      sheetName: keywordSheetName,
-      expectedHeaders: ["词根", "关键词"]
-    });
-  } finally {
-    if (targetPage) {
-      await detachChromePage(cdp, targetPage.sessionId);
-    }
-    if (bootstrapPage) {
-      if (closeBootstrapPage) {
-        await cdp.send("Target.closeTarget", { targetId: bootstrapPage.targetId }).catch(() => {});
-      } else {
-        await detachChromePage(cdp, bootstrapPage.sessionId);
-      }
-    }
-    cdp.close();
+    return findProfile(browserAccount);
+  } catch {
+    return {
+      directory: "",
+      name: "",
+      email: browserAccount,
+      fullName: ""
+    };
   }
+}
 
-  const payload = {
+export async function readGoogleSheetInput({
+  sheetUrl = DEFAULT_SHEET_URL,
+  gid = getGid(sheetUrl),
+  accountSheetName = "工具账号密码",
+  keywordSheetName = "词根拓展",
+  readSheet = readSheetWithApi,
+  findProfile = findChromeProfile,
+  now = () => new Date()
+} = {}) {
+  const accountSheet = await readSheet({
+    sheetUrl,
+    sheetName: accountSheetName,
+    expectedHeaders: ["semrush账号", "semrush密码"]
+  });
+  const toolAccount = accountSheet.rows[0] || {};
+  const browserAccount = getRequiredValueByAliases(toolAccount, [
+    "运行浏览器账号",
+    "运行浏览器的账号"
+  ]);
+  const chromeProfile = resolveChromeProfile(findProfile, browserAccount);
+
+  const keywordSheet = await readSheet({
+    sheetUrl,
+    sheetName: keywordSheetName,
+    expectedHeaders: ["词根", "关键词"]
+  });
+
+  return {
     source: {
       sheetUrl,
       gid,
@@ -147,7 +90,7 @@ async function main() {
       accountSheetCsvUrl: accountSheet.csvUrl,
       keywordSheetName,
       keywordSheetCsvUrl: keywordSheet.csvUrl,
-      readAt: new Date().toISOString()
+      readAt: now().toISOString()
     },
     toolAccount: {
       semrush账号: toolAccount["semrush账号"] || "",
@@ -170,19 +113,36 @@ async function main() {
       }
     }
   };
+}
+
+async function main() {
+  const sheetUrl = readArg("sheet", process.env.GOOGLE_SHEET_URL || DEFAULT_SHEET_URL);
+  const gid = readArg("gid", process.env.GOOGLE_SHEET_GID || getGid(sheetUrl));
+  const accountSheetName = readArg("account-sheet", "工具账号密码");
+  const keywordSheetName = readArg("keyword-sheet", "词根拓展");
+  const output = readArg("out", "output/google-sheet-input.json");
+
+  const payload = await readGoogleSheetInput({
+    sheetUrl,
+    gid,
+    accountSheetName,
+    keywordSheetName
+  });
 
   await fs.mkdir(path.dirname(output), { recursive: true });
   await fs.writeFile(output, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
 
-  console.log(`Browser account: ${browserAccount}`);
-  console.log(`Chrome profile: ${chromeProfile.directory} (${chromeProfile.email || chromeProfile.name})`);
-  console.log(`Read ${accountSheet.rows.length} row(s) from ${accountSheetName}`);
-  console.log(`Read ${keywordSheet.rows.length} row(s) from ${keywordSheetName}`);
+  console.log(`Browser account: ${payload.toolAccount["运行浏览器账号"]}`);
+  console.log(`Chrome profile: ${payload.chromeProfile.directory} (${payload.chromeProfile.email || payload.chromeProfile.name})`);
+  console.log(`Read ${payload.sheets[accountSheetName].rows.length} row(s) from ${accountSheetName}`);
+  console.log(`Read ${payload.sheets[keywordSheetName].rows.length} row(s) from ${keywordSheetName}`);
   console.log(`Wrote ${output}`);
-  console.log(JSON.stringify(keywordSheet.rows[0] || {}, null, 2));
+  console.log(JSON.stringify(payload.sheets[keywordSheetName].rows[0] || {}, null, 2));
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exit(1);
-});
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exit(1);
+  });
+}

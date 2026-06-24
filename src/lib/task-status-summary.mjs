@@ -65,21 +65,21 @@ export function summarizeTaskStatus(taskRow, keywordRows) {
   const rows = keywordRowsForTask(taskRow, keywordRows);
   const machineContinueRows = rows.filter((row) => trim(row.record["判断"]) === "继续");
   const initialBingContinueRows = rows.filter((row) => trim(row.record["bing初步判断"]) === "继续");
-  const secondBingContinueRows = rows.filter((row) => trim(row.record["bing二次判断"]) === "继续");
+  const serpOpportunityRows = rows.filter((row) => ["继续", "机会"].includes(trim(row.record["SERP机会判断"])));
   const ratingARows = rows.filter((row) => trim(row.record["评级"]) === "A");
-  const agentStarted = secondBingContinueRows.length > 0;
+  const agentStarted = serpOpportunityRows.length > 0;
   const zeroCandidateFlowCompleted = semCollectionCompleted(taskRow) && machineContinueRows.length === 0;
 
   const threeMDone = countWhere(machineContinueRows, (row) => hasValue(row, "3M展示"));
-  const secondDone = countWhere(initialBingContinueRows, (row) => hasValue(row, "bing二次判断"));
+  const secondDone = countWhere(initialBingContinueRows, (row) => hasValue(row, "SERP机会判断"));
   const countryDone = countWhere(ratingARows, (row) => hasValue(row, "top 1国家"));
-  const agentDone = countWhere(secondBingContinueRows, (row) =>
+  const agentDone = countWhere(serpOpportunityRows, (row) =>
     trim(row.record["agent状态"]) === "完成" || trim(row.record["agent状态"]) === "排除"
   );
 
-  const agentStatus = agentStarted && agentDone === secondBingContinueRows.length
-    ? ratingSummary(secondBingContinueRows)
-    : agentStarted ? progress(agentDone, secondBingContinueRows.length) : existingStatus(taskRow, "Agent 判断流程");
+  const agentStatus = agentStarted && agentDone === serpOpportunityRows.length
+    ? ratingSummary(serpOpportunityRows)
+    : agentStarted ? progress(agentDone, serpOpportunityRows.length) : existingStatus(taskRow, "Agent 判断流程");
 
   return {
     "3M采集状态": machineContinueRows.length > 0 || zeroCandidateFlowCompleted

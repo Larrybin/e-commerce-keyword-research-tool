@@ -5,15 +5,18 @@ import { batchUpdateSheetValues, getSheetValues } from "./lib/google-sheets-api.
 import { columnName, headerIndex, valuesToTable } from "./lib/table-utils.mjs";
 import { DEFAULT_SHEET_URL } from "./lib/tool-config.mjs";
 import {
+  KEYWORD_TOTAL_SHEET,
+  keywordTotalReadRange
+} from "./lib/sheet-write.mjs";
+import {
   buildTaskStatusUpdates,
   statusColumns
 } from "./lib/task-status-summary.mjs";
 
 const TASK_SHEET = "词根拓展";
-const KEYWORD_SHEET = "关键词总表";
 
 const TASK_READ_RANGE = `${TASK_SHEET}!A:Z`;
-const KEYWORD_READ_RANGE = `${KEYWORD_SHEET}!A:AZ`;
+const KEYWORD_READ_RANGE = keywordTotalReadRange();
 
 const REQUIRED_KEYWORD_HEADERS = [
   "词根",
@@ -21,7 +24,7 @@ const REQUIRED_KEYWORD_HEADERS = [
   "判断",
   "3M展示",
   "bing初步判断",
-  "bing二次判断",
+  "SERP机会判断",
   "第一次判断",
   "评级",
   "agent状态",
@@ -45,7 +48,7 @@ function validateHeaders(tableName, headers, requiredHeaders) {
 
 export function buildTaskStatusWritePlan(taskTable, keywordTable) {
   validateHeaders(TASK_SHEET, taskTable.headers, ["词根", "关键词", ...statusColumns()]);
-  validateHeaders(KEYWORD_SHEET, keywordTable.headers, REQUIRED_KEYWORD_HEADERS);
+  validateHeaders(KEYWORD_TOTAL_SHEET, keywordTable.headers, REQUIRED_KEYWORD_HEADERS);
 
   const statusIndexes = Object.fromEntries(
     statusColumns().map((header) => [header, headerIndex(taskTable.headers, header, TASK_SHEET)])
@@ -131,7 +134,7 @@ async function main() {
     source: {
       sheetUrl,
       taskSheet: TASK_SHEET,
-      keywordSheet: KEYWORD_SHEET,
+      keywordSheet: KEYWORD_TOTAL_SHEET,
       dryRun,
       readAt: new Date().toISOString()
     },

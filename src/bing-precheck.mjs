@@ -30,10 +30,11 @@ import {
   shouldUseBingApiMetrics
 } from "./lib/bing-webmaster-api.mjs";
 import {
+  classifyTopSearchResults,
   evaluateBingPrecheck,
+  evaluateSerpOpportunity,
   formatInteger,
-  sortCountryBreakdown,
-  summarizeTopUrlCompetition
+  sortCountryBreakdown
 } from "./lib/bing-precheck.mjs";
 import { readArg, readFlag } from "./lib/args.mjs";
 import { findChromeProfile, openChromeProfileUrl } from "./lib/chrome-profiles.mjs";
@@ -47,15 +48,19 @@ import {
   updateSheetValues
 } from "./lib/google-sheets-api.mjs";
 import { DEFAULT_SHEET_URL } from "./lib/tool-config.mjs";
+import {
+  KEYWORD_TOTAL_SHEET,
+  keywordTotalReadRange
+} from "./lib/sheet-write.mjs";
 import { writeJson } from "./lib/files.mjs";
 
 const ACCOUNT_SHEET = "工具账号密码";
 const TASK_SHEET = "词根拓展";
-const KEYWORD_TOTAL_SHEET = "关键词总表";
-const DEFAULT_SITE_URL = "https://2fafree.com/";
+const DEFAULT_SITE_URL = "https://backwardstextgenerator.com/";
 const WHITE_BACKGROUND = { red: 1, green: 1, blue: 1 };
 const RED_BACKGROUND = { red: 1, green: 0, blue: 0 };
 const PENDING_BACKGROUND = { red: 1, green: 0.9, blue: 0 };
+const DEFAULT_BING_CHROME_PROFILE = "binben168er@gmail.com";
 
 function columnName(index) {
   let value = index + 1;
@@ -130,35 +135,6 @@ function optionalHeaderIndex(headers, header) {
   return headers.indexOf(header);
 }
 
-function uniqueNonEmpty(values) {
-  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
-}
-
-function readBingAccounts(accountTable) {
-  const headers = accountTable.headers;
-  const index = headers.indexOf("bing webmaster所在的chrome账号");
-  if (index === -1) {
-    throw new Error(`${ACCOUNT_SHEET} 缺少表头: bing webmaster所在的chrome账号`);
-  }
-  const accounts = uniqueNonEmpty(accountTable.rows.map((row) => row.values[index]));
-  if (accounts.length === 0) {
-    throw new Error(`${ACCOUNT_SHEET} 没有填写 bing webmaster所在的chrome账号`);
-  }
-  return accounts;
-}
-
-function filterBingAccounts(accounts, requestedAccount) {
-  const expected = String(requestedAccount || "").trim().toLowerCase();
-  if (!expected) {
-    return accounts;
-  }
-  const filtered = accounts.filter((account) => String(account || "").trim().toLowerCase() === expected);
-  if (filtered.length === 0) {
-    throw new Error(`工具账号密码 中没有找到 Bing Chrome 账号: ${requestedAccount}`);
-  }
-  return filtered;
-}
-
 function buildRuleIndex(taskTable) {
   const rootRules = new Map();
   const keywordRules = new Map();
@@ -192,11 +168,11 @@ function findRuleForKeywordRow(keywordRow, ruleIndex) {
   return candidates[0];
 }
 
-function selectKeywordRows(keywordTable, { fromRow, toRow, force, onlyTop5Zero, onlyMissingCountry, chromeOnly, countryOnly }) {
+function selectKeywordRows(keywordTable, { fromRow, toRow, force, onlyMissingCountry, chromeOnly, countryOnly }) {
+  const prefilterIndex = headerIndex(keywordTable.headers, "agent预判断");
   const judgementIndex = headerIndex(keywordTable.headers, "判断");
   const bingJudgementIndex = optionalHeaderIndex(keywordTable.headers, "bing初步判断");
-  const bingSecondJudgementIndex = optionalHeaderIndex(keywordTable.headers, "bing二次判断");
-  const top5Index = optionalHeaderIndex(keywordTable.headers, "top5根域名数量");
+  const serpOpportunityIndex = optionalHeaderIndex(keywordTable.headers, "SERP机会判断");
   const top1CountryIndex = optionalHeaderIndex(keywordTable.headers, "top 1国家");
   const ratingIndex = optionalHeaderIndex(keywordTable.headers, "评级");
   if (countryOnly && ratingIndex === -1) {
@@ -214,7 +190,8 @@ function selectKeywordRows(keywordTable, { fromRow, toRow, force, onlyTop5Zero, 
     if (!judgement && !toRow) {
       break;
     }
-    if (onlyTop5Zero && String(row.values[top5Index] || "").trim() !== "0") {
+    const prefilter = String(row.values[prefilterIndex] || "").trim();
+    if (prefilter !== "继续") {
       continue;
     }
     const bingJudgement = bingJudgementIndex === -1 ? "" : String(row.values[bingJudgementIndex] || "").trim();
@@ -242,11 +219,11 @@ function selectKeywordRows(keywordTable, { fromRow, toRow, force, onlyTop5Zero, 
     }
     if (chromeOnly) {
       const bingJudgement = bingJudgementIndex === -1 ? "" : String(row.values[bingJudgementIndex] || "").trim();
-      const bingSecondJudgement = bingSecondJudgementIndex === -1 ? "" : String(row.values[bingSecondJudgementIndex] || "").trim();
+      const serpOpportunity = serpOpportunityIndex === -1 ? "" : String(row.values[serpOpportunityIndex] || "").trim();
       if (bingJudgement !== "继续") {
         continue;
       }
-      if (bingSecondJudgement && !force) {
+      if (serpOpportunity && !force) {
         continue;
       }
       selected.push(row);
@@ -258,18 +235,6 @@ function selectKeywordRows(keywordTable, { fromRow, toRow, force, onlyTop5Zero, 
     selected.push(row);
   }
   return selected;
-}
-
-function evaluateBingApiPrecheck({ impressions, minImpressions }) {
-  const impressionsNumber = Number(String(impressions || "").replace(/,/g, "")) || 0;
-  const minImpressionsNumber = Number(String(minImpressions || "").replace(/,/g, "")) || 0;
-  const impressionFailed = minImpressionsNumber > 0 && impressionsNumber < minImpressionsNumber;
-  return {
-    judgement: impressionFailed ? "拒绝" : "继续",
-    impressionsNumber,
-    minImpressionsNumber,
-    impressionFailed
-  };
 }
 
 async function approveRemoteDebuggingPrompt() {
@@ -545,31 +510,21 @@ async function readRequiredSheet(sheetUrl, range) {
 
 function buildKeywordTotalUpdates(keywordHeaders, keywordRow, precheck, competition) {
   const updates = new Map();
-  const set = (header, value) => {
-    const index = headerIndex(keywordHeaders, header);
+  const set = (header, value, { required = true } = {}) => {
+    const index = required ? headerIndex(keywordHeaders, header) : optionalHeaderIndex(keywordHeaders, header);
+    if (index === -1) {
+      return;
+    }
     updates.set(index, value);
   };
 
   set("3M展示", formatInteger(precheck.impressionsNumber));
-  set("top5根域名数量", String(competition.count));
   set("bing初步判断", precheck.judgement);
-
-  const clearDomainFields = () => {
-    set("根域名1", "");
-    set("根域名1排名", "");
-    set("根域名2", "");
-    set("根域名2排名", "");
-  };
-
-  if (precheck.judgement !== "拒绝") {
-    const topDomains = competition.domains.slice(0, 2);
-    set("根域名1", topDomains[0]?.domain || "");
-    set("根域名1排名", topDomains[0]?.rank ? String(topDomains[0].rank) : "");
-    set("根域名2", topDomains[1]?.domain || "");
-    set("根域名2排名", topDomains[1]?.rank ? String(topDomains[1].rank) : "");
-  } else {
-    clearDomainFields();
-  }
+  set("SERP机会判断", competition.judgement);
+  set("top10大平台数", String(competition.platformCount), { required: false });
+  set("top10独立站数", String(competition.independentSiteCount), { required: false });
+  set("疑似低权重独立站", competition.suspiciousLowAuthorityIndependentSite, { required: false });
+  set("SERP格局", competition.pattern, { required: false });
 
   const existing = [...keywordRow.values];
   for (const [columnIndex, value] of updates.entries()) {
@@ -600,8 +555,11 @@ function findTopCountrySlots(keywordHeaders) {
 
 function buildKeywordTotalApiUpdates(keywordHeaders, keywordRow, apiPrecheck) {
   const updates = new Map();
-  const set = (header, value) => {
-    const index = headerIndex(keywordHeaders, header);
+  const set = (header, value, { required = true } = {}) => {
+    const index = required ? headerIndex(keywordHeaders, header) : optionalHeaderIndex(keywordHeaders, header);
+    if (index === -1) {
+      return;
+    }
     updates.set(index, value);
   };
 
@@ -609,14 +567,13 @@ function buildKeywordTotalApiUpdates(keywordHeaders, keywordRow, apiPrecheck) {
   set("bing初步判断", apiPrecheck.judgement);
 
   for (const header of [
-    "top5根域名数量",
-    "bing二次判断",
-    "根域名1",
-    "根域名1排名",
-    "根域名2",
-    "根域名2排名"
+    "SERP机会判断",
+    "top10大平台数",
+    "top10独立站数",
+    "疑似低权重独立站",
+    "SERP格局"
   ]) {
-    set(header, "");
+    set(header, "", { required: false });
   }
 
   const existing = [...keywordRow.values];
@@ -648,26 +605,19 @@ function buildKeywordTotalCountryUpdates(keywordHeaders, keywordRow, countryTopR
 
 function buildKeywordTotalChromeUpdates(keywordHeaders, keywordRow, chromePrecheck, competition) {
   const updates = new Map();
-  const set = (header, value) => {
-    const index = headerIndex(keywordHeaders, header);
+  const set = (header, value, { required = true } = {}) => {
+    const index = required ? headerIndex(keywordHeaders, header) : optionalHeaderIndex(keywordHeaders, header);
+    if (index === -1) {
+      return;
+    }
     updates.set(index, value);
   };
 
-  set("top5根域名数量", String(competition.count));
-  set("bing二次判断", chromePrecheck.judgement);
-
-  if (chromePrecheck.judgement !== "拒绝") {
-    const topDomains = competition.domains.slice(0, 2);
-    set("根域名1", topDomains[0]?.domain || "");
-    set("根域名1排名", topDomains[0]?.rank ? String(topDomains[0].rank) : "");
-    set("根域名2", topDomains[1]?.domain || "");
-    set("根域名2排名", topDomains[1]?.rank ? String(topDomains[1].rank) : "");
-  } else {
-    set("根域名1", "");
-    set("根域名1排名", "");
-    set("根域名2", "");
-    set("根域名2排名", "");
-  }
+  set("SERP机会判断", chromePrecheck.judgement);
+  set("top10大平台数", String(competition.platformCount), { required: false });
+  set("top10独立站数", String(competition.independentSiteCount), { required: false });
+  set("疑似低权重独立站", competition.suspiciousLowAuthorityIndependentSite, { required: false });
+  set("SERP格局", chromePrecheck.pattern, { required: false });
 
   const existing = [...keywordRow.values];
   for (const [columnIndex, value] of updates.entries()) {
@@ -722,8 +672,6 @@ async function processKeywordRow({
 }) {
   const keyword = String(keywordRow.record["关键词"] || "").trim();
   const minImpressions = rule.record["bing最低展示量"] || "";
-  const maxTop5Domains = rule.record["Max root on Bing top 5url"] || "";
-
   let extracted;
   if (useBingApiMetrics && bingApiKey) {
     const metrics = await getKeywordResearchMetrics({
@@ -743,19 +691,18 @@ async function processKeywordRow({
   } else {
     extracted = await fetchBingKeywordResearchViaPageApis(cdp, page.sessionId, { keyword, siteUrl });
   }
-  const competition = summarizeTopUrlCompetition(extracted.topUrls, 5);
+  const serp = classifyTopSearchResults(extracted.topUrls, 10);
+  const serpPrecheck = evaluateSerpOpportunity(serp);
   const precheck = evaluateBingPrecheck({
     impressions: extracted.impressions,
-    minImpressions,
-    top5DomainCount: competition.count,
-    maxTop5Domains
+    minImpressions
   });
 
   const values = buildKeywordTotalUpdates(
     keywordTable.headers,
     keywordRow,
     precheck,
-    competition
+    { ...serp, ...serpPrecheck }
   );
   const writeResult = await writeKeywordTotalRow({
     sheetUrl,
@@ -767,22 +714,20 @@ async function processKeywordRow({
 
   const redCells = [];
   const ruleCells = [
-    { row: keywordRow.rowNumber, column: headerIndex(keywordTable.headers, "3M展示") },
-    { row: keywordRow.rowNumber, column: headerIndex(keywordTable.headers, "top5根域名数量") }
+    { row: keywordRow.rowNumber, column: headerIndex(keywordTable.headers, "3M展示") }
   ];
+  const serpCellHeader = optionalHeaderIndex(keywordTable.headers, "SERP格局") === -1 ? "SERP机会判断" : "SERP格局";
+  const serpCell = { row: keywordRow.rowNumber, column: headerIndex(keywordTable.headers, serpCellHeader) };
   await formatCellBackgroundsOrQueue({
     writeQueue,
     sheetUrl,
     sheetId: keywordTotalGid,
-    cells: ruleCells,
+    cells: [...ruleCells, serpCell],
     color: WHITE_BACKGROUND
   }).catch(() => ({ skipped: true }));
 
   if (precheck.impressionFailed) {
     redCells.push(ruleCells[0]);
-  }
-  if (precheck.top5DomainFailed) {
-    redCells.push(ruleCells[1]);
   }
   const formatResult = await formatCellBackgroundsOrQueue({
     writeQueue,
@@ -795,7 +740,7 @@ async function processKeywordRow({
     writeQueue,
     sheetUrl,
     sheetId: keywordTotalGid,
-    cells: precheck.top5DomainPending ? [ruleCells[1]] : [],
+    cells: serpPrecheck.judgement === "待定" ? [serpCell] : [],
     color: PENDING_BACKGROUND
   }).catch((error) => ({ ok: false, reason: error.message || String(error) }));
 
@@ -803,9 +748,12 @@ async function processKeywordRow({
     row: keywordRow.rowNumber,
     keyword,
     judgement: precheck.judgement,
+    serpJudgement: serpPrecheck.judgement,
     impressions: formatInteger(precheck.impressionsNumber),
-    top5DomainCount: competition.count,
-    domains: competition.domains.slice(0, 2),
+    top10PlatformCount: serp.platformCount,
+    top10IndependentSiteCount: serp.independentSiteCount,
+    suspiciousLowAuthorityIndependentSite: serp.suspiciousLowAuthorityIndependentSite,
+    serpPattern: serpPrecheck.pattern,
     topCountries: [],
     writeResult,
     formatResult,
@@ -833,7 +781,7 @@ async function processKeywordRowApiOnly({
     countryConcurrency: bingApiCountryConcurrency,
     countryRequestDelayMs: bingApiCountryRequestDelayMs
   });
-  const apiPrecheck = evaluateBingApiPrecheck({
+  const apiPrecheck = evaluateBingPrecheck({
     impressions: metrics.impressions,
     minImpressions
   });
@@ -973,7 +921,7 @@ async function extractTopUrlsFromCurrentPageDom(cdp, sessionId) {
             .map(linkValue);
         }
         if (urls.length > 0) {
-          return { found: true, urls: [...new Set(urls)].slice(0, 5) };
+          return { found: true, urls: [...new Set(urls)].slice(0, 10) };
         }
         if (heading || topUrlGrid) {
           window.scrollBy({ top: Math.floor(window.innerHeight * 0.45), left: 0, behavior: "instant" });
@@ -1004,16 +952,10 @@ async function processKeywordRowChromeOnly({
   writeQueue
 }) {
   const keyword = String(keywordRow.record["关键词"] || "").trim();
-  const maxTop5Domains = rule.record["Max root on Bing top 5url"] || "";
   const topUrls = await fetchTopUrlsForKeyword(cdp, page, { keyword, siteUrl });
-  const competition = summarizeTopUrlCompetition(topUrls, 5);
-  const chromePrecheck = evaluateBingPrecheck({
-    impressions: "",
-    minImpressions: "",
-    top5DomainCount: competition.count,
-    maxTop5Domains
-  });
-  const values = buildKeywordTotalChromeUpdates(keywordTable.headers, keywordRow, chromePrecheck, competition);
+  const serp = classifyTopSearchResults(topUrls, 10);
+  const chromePrecheck = evaluateSerpOpportunity(serp);
+  const values = buildKeywordTotalChromeUpdates(keywordTable.headers, keywordRow, chromePrecheck, serp);
   const writeResult = await writeKeywordTotalRow({
     sheetUrl,
     rowNumber: keywordRow.rowNumber,
@@ -1022,12 +964,13 @@ async function processKeywordRowChromeOnly({
     writeQueue
   });
 
-  const top5Cell = { row: keywordRow.rowNumber, column: headerIndex(keywordTable.headers, "top5根域名数量") };
+  const serpCellHeader = optionalHeaderIndex(keywordTable.headers, "SERP格局") === -1 ? "SERP机会判断" : "SERP格局";
+  const serpCell = { row: keywordRow.rowNumber, column: headerIndex(keywordTable.headers, serpCellHeader) };
   await formatCellBackgroundsOrQueue({
     writeQueue,
     sheetUrl,
     sheetId: keywordTotalGid,
-    cells: [top5Cell],
+    cells: [serpCell],
     color: WHITE_BACKGROUND
   }).catch(() => ({ skipped: true }));
 
@@ -1035,14 +978,14 @@ async function processKeywordRowChromeOnly({
     writeQueue,
     sheetUrl,
     sheetId: keywordTotalGid,
-    cells: chromePrecheck.top5DomainFailed ? [top5Cell] : [],
+    cells: [],
     color: RED_BACKGROUND
   }).catch((error) => ({ ok: false, reason: error.message || String(error) }));
   const pendingFormatResult = await formatCellBackgroundsOrQueue({
     writeQueue,
     sheetUrl,
     sheetId: keywordTotalGid,
-    cells: chromePrecheck.top5DomainPending ? [top5Cell] : [],
+    cells: chromePrecheck.judgement === "待定" ? [serpCell] : [],
     color: PENDING_BACKGROUND
   }).catch((error) => ({ ok: false, reason: error.message || String(error) }));
 
@@ -1051,8 +994,10 @@ async function processKeywordRowChromeOnly({
     keyword,
     judgement: chromePrecheck.judgement,
     impressions: keywordRow.record["3M展示"] || "",
-    top5DomainCount: competition.count,
-    domains: competition.domains.slice(0, 2),
+    top10PlatformCount: serp.platformCount,
+    top10IndependentSiteCount: serp.independentSiteCount,
+    suspiciousLowAuthorityIndependentSite: serp.suspiciousLowAuthorityIndependentSite,
+    serpPattern: chromePrecheck.pattern,
     writeResult,
     formatResult,
     pendingFormatResult
@@ -1066,12 +1011,11 @@ async function main() {
   const fromRowArg = readArg("from-row", "");
   const toRowArg = readArg("to-row", "");
   const force = readFlag("force");
-  const onlyTop5Zero = readFlag("only-top5-zero");
   const onlyMissingCountry = readFlag("only-missing-country");
   const stopOnError = readFlag("stop-on-error");
   const outDir = readArg("out-dir", "output/bing-precheck");
   const keywordTotalGid = readArg("keyword-total-gid", "999267438");
-  const requestedBingAccount = readArg("bing-account", "");
+  const requestedBingAccount = readArg("bing-account", process.env.BING_CHROME_PROFILE || DEFAULT_BING_CHROME_PROFILE);
   const minDelayMs = Number(readArg("min-delay-ms", "3500")) || 3500;
   const maxDelayMs = Number(readArg("max-delay-ms", "7500")) || 7500;
   const rowRetries = Number(readArg("row-retries", "3")) || 3;
@@ -1113,21 +1057,17 @@ async function main() {
   let writeQueue;
   let finalFlushCompleted = false;
   try {
-    const [accountTable, taskTable, keywordTable] = await Promise.all([
-      readRequiredSheet(sheetUrl, `${ACCOUNT_SHEET}!A:Z`),
+    const [taskTable, keywordTable] = await Promise.all([
       readRequiredSheet(sheetUrl, `${TASK_SHEET}!A:Z`),
-      readRequiredSheet(sheetUrl, `${KEYWORD_TOTAL_SHEET}!A:AZ`)
+      readRequiredSheet(sheetUrl, keywordTotalReadRange())
     ]);
     console.log(`Keyword total headers: ${keywordTable.headers.join(" | ")}`);
-    const accounts = apiOnly
-      ? []
-      : filterBingAccounts(readBingAccounts(accountTable), requestedBingAccount);
+    const accounts = apiOnly ? [] : [requestedBingAccount];
     const ruleIndex = buildRuleIndex(taskTable);
     const keywordRows = selectKeywordRows(keywordTable, {
       fromRow,
       toRow,
       force,
-      onlyTop5Zero,
       onlyMissingCountry,
       chromeOnly,
       countryOnly
@@ -1372,7 +1312,7 @@ async function main() {
           }
         }
         summaries.push(summary);
-        console.log(`Row ${summary.row}: ${summary.keyword} -> ${summary.judgement}, 3M=${summary.impressions}${apiOnly ? "" : `, top5=${summary.top5DomainCount}`}`);
+        console.log(`Row ${summary.row}: ${summary.keyword} -> ${summary.judgement}, 3M=${summary.impressions}${apiOnly ? "" : `, SERP=${summary.serpJudgement || summary.judgement}, platform=${summary.top10PlatformCount}, independent=${summary.top10IndependentSiteCount}`}`);
         if (writeQueue.shouldFlush()) {
           const flushResult = await writeQueue.flush(`batch_at_row_${summary.row}`);
           console.log(`Flushed ${flushResult.valueRows || 0} row write(s), ${flushResult.formatCells || 0} format cell(s).`);

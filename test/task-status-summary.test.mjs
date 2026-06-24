@@ -44,7 +44,7 @@ test("task status summary records in-progress collection and agent counts", () =
       "判断": "继续",
       "3M展示": "120",
       "bing初步判断": "继续",
-      "bing二次判断": "继续",
+      "SERP机会判断": "机会",
       "评级": "A",
       "top 1国家": "United States",
       "agent状态": "完成"
@@ -54,7 +54,7 @@ test("task status summary records in-progress collection and agent counts", () =
       "判断": "继续",
       "3M展示": "",
       "bing初步判断": "继续",
-      "bing二次判断": "",
+      "SERP机会判断": "",
       "评级": "",
       "top 1国家": "",
       "agent状态": ""
@@ -64,7 +64,7 @@ test("task status summary records in-progress collection and agent counts", () =
       "判断": "拒绝",
       "3M展示": "",
       "bing初步判断": "",
-      "bing二次判断": "",
+      "SERP机会判断": "",
       "评级": "",
       "top 1国家": "",
       "agent状态": ""
@@ -87,7 +87,7 @@ test("task status summary keeps agent progress while pending rows remain", () =>
       "判断": "继续",
       "3M展示": "90",
       "bing初步判断": "继续",
-      "bing二次判断": "继续",
+      "SERP机会判断": "继续",
       "评级": "A",
       "agent状态": "完成"
     }),
@@ -96,7 +96,7 @@ test("task status summary keeps agent progress while pending rows remain", () =>
       "判断": "继续",
       "3M展示": "80",
       "bing初步判断": "继续",
-      "bing二次判断": "继续",
+      "SERP机会判断": "继续",
       "评级": "",
       "agent状态": ""
     })
@@ -116,7 +116,7 @@ test("task status summary leaves unstarted stages blank", () => {
       "判断": "",
       "3M展示": "",
       "bing初步判断": "",
-      "bing二次判断": "",
+      "SERP机会判断": "",
       "评级": "",
       "top 1国家": "",
       "agent状态": ""
@@ -146,7 +146,7 @@ test("task status summary preserves existing zero progress for stages already re
       "判断": "",
       "3M展示": "",
       "bing初步判断": "",
-      "bing二次判断": "",
+      "SERP机会判断": "",
       "评级": "",
       "top 1国家": "",
       "agent状态": ""
@@ -181,28 +181,28 @@ test("task status summary reports completed agent rating distribution", () => {
   const keywordRows = [
     row(10, {
       "词根": "generator",
-      "bing二次判断": "继续",
+      "SERP机会判断": "继续",
       "评级": "A",
       "第一次判断": "继续",
       "agent状态": "完成"
     }),
     row(11, {
       "词根": "generator",
-      "bing二次判断": "继续",
+      "SERP机会判断": "继续",
       "评级": "B",
       "第一次判断": "继续",
       "agent状态": "完成"
     }),
     row(12, {
       "词根": "generator",
-      "bing二次判断": "继续",
+      "SERP机会判断": "继续",
       "评级": "C",
       "第一次判断": "继续",
       "agent状态": "完成"
     }),
     row(13, {
       "词根": "generator",
-      "bing二次判断": "继续",
+      "SERP机会判断": "继续",
       "评级": "",
       "第一次判断": "排除",
       "agent状态": "排除"
@@ -229,7 +229,7 @@ test("task status update builder skips empty task rows", () => {
         "判断": "继续",
         "3M展示": "10",
         "bing初步判断": "",
-        "bing二次判断": "",
+        "SERP机会判断": "",
         "评级": "",
         "top 1国家": "",
         "agent状态": ""
