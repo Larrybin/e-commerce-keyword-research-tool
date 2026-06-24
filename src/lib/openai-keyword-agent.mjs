@@ -1,12 +1,14 @@
 import { AGENT_STATUS_COLUMN } from "./keyword-agent-rules.mjs";
 import { summarizeResearchForPrompt } from "./keyword-agent-research.mjs";
 
-const DEFAULT_MODEL = "gpt-5.4-mini";
+const DEFAULT_LLM_PROVIDER = "deepseek";
+const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
+const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
 export { AGENT_STATUS_COLUMN };
 
 export const KEYWORD_AGENT_SYSTEM_PROMPT = `你是电子商务 + B端关键词机会判断 agent，不是工具站筛选器。
 
-输入 rows 已经过前置流量和竞争筛选；不要重新设置搜索量、KD、Bing 展示或 top5 根域名门槛，只做最后商业判断。
+输入 rows 已经过前置流量和 SERP 机会筛选；不要重新设置搜索量、KD、Bing 展示或 SERP 门槛，只做最后商业判断。
 
 目标：同时支持电商和B端。
 - 电商：实体商品、品类词、配件耗材、购买词、价格词、best/review/comparison 导购词都可以是候选，不要因为是实体商品而排除。
@@ -30,7 +32,8 @@ export const KEYWORD_AGENT_SYSTEM_PROMPT = `你是电子商务 + B端关键词�
 评级：A=强购买或B端采购且可履约/可售；B=有商业价值但竞争、品牌、物流或内容成本较高；C=可做但履约重、品牌风险、低毛利或意图偏弱；排除行 rating 为空字符串。
 
 排除行：购买意图=排除，产品类型按实际风险类型填写，建议和评级为空，判断依据写 8-80 字中文原因。
-只返回 JSON Schema 要求的 JSON，不要输出 Markdown。建议 50 字以内，判断依据 80 字以内。`;
+只返回 JSON Schema 要求的 JSON，不要输出 Markdown。建议 50 字以内，判断依据 80 字以内。
+JSON 输出示例：{"decisions":[{"rowNumber":2,"purchaseIntent":"强","productType":"配件耗材","recommendation":"优先做配件页验证SKU和毛利","rationale":"配件耗材，强购买意图","rating":"A"}]}`;
 
 const VALID_PURCHASE_INTENTS = ["强", "中", "弱", "B端采购", "排除"];
 const VALID_PRODUCT_TYPES = ["实体商品", "配件耗材", "品牌商品", "导购评测", "B端采购", "本地服务", "售后信息", "高风险品类", "其他"];
@@ -135,7 +138,7 @@ export function buildPromptPayload(items) {
   return {
     task: "Classify ecommerce and B2B keyword opportunities for a keyword research spreadsheet.",
     rules: {
-      trafficAssumption: "Rows are already prefiltered; do not add search-volume/KD/Bing-impression/top5-domain thresholds.",
+      trafficAssumption: "Rows are already prefiltered; do not add search-volume/KD/Bing-impression/SERP thresholds.",
       targetColumns: ["购买意图", "产品类型", "建议", "判断依据", "评级"],
       ruleColumns: ["目标模式", "可售品类"],
       ecommerceAndB2B: "Keep ecommerce physical product, purchase, price, parts/accessory, best/review/comparison, and B2B supplier/manufacturer/wholesale/RFQ keywords when commercially viable. Do not exclude physical products merely because they are physical products.",
@@ -145,10 +148,34 @@ export function buildPromptPayload(items) {
     rows: items.map((item) => ({
       rowNumber: item.rowNumber,
       keyword: item.keyword,
-      keywordRow: compactRecord(item.keywordRecord, ["词根", "关键词", "国家", "搜索量", "KD", "3M展示", "top5根域名数量", "根域名1", "根域名1排名", "根域名2", "根域名2排名", "top 1国家", "top 1展示量"]),
+      keywordRow: compactRecord(item.keywordRecord, ["词根", "关键词", "国家", "搜索量", "KD", "3M展示", "SERP机会判断", "top10大平台数", "top10独立站数", "疑似低权重独立站", "SERP格局", "top 1国家", "top 1展示量"]),
       customerConfig: { targetModes: ruleModes(item.rule), sellableCategories: item.rule?.["可售品类"] || "", root: item.rule?.["词根"] || "" },
       research: item.research ? summarizeResearchForPrompt(item.research) : { needed: false, reasons: [], confidence: "none", summary: "", topFindings: [] }
     }))
+  };
+}
+
+function normalizeLLMProvider(provider = "") {
+  const value = String(provider || process.env.KEYWORD_AGENT_LLM_PROVIDER || DEFAULT_LLM_PROVIDER).trim().toLowerCase();
+  if (value === "deepseek" || value === "openai") return value;
+  throw new Error(`Unsupported LLM provider: ${provider}. Use deepseek or openai.`);
+}
+
+export function resolveKeywordAgentLLMConfig({ provider = "", model = "" } = {}) {
+  const selectedProvider = normalizeLLMProvider(provider);
+  if (selectedProvider === "deepseek") {
+    return {
+      provider: "deepseek",
+      model: model || process.env.KEYWORD_AGENT_MODEL || process.env.DEEPSEEK_MODEL || DEFAULT_DEEPSEEK_MODEL,
+      apiKey: process.env.DEEPSEEK_API_KEY || "",
+      baseUrl: (process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com").replace(/\/+$/, "")
+    };
+  }
+  return {
+    provider: "openai",
+    model: model || process.env.KEYWORD_AGENT_MODEL || process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL,
+    apiKey: process.env.OPENAI_API_KEY || "",
+    baseUrl: (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, "")
   };
 }
 
@@ -181,17 +208,28 @@ export function normalizeDecision(decision) { return validateLLMOutput({ rowNumb
 
 function extractJsonContent(data) {
   const content = data?.choices?.[0]?.message?.content;
-  if (!content) throw new Error(`OpenAI response missing message content: ${JSON.stringify(data).slice(0, 500)}`);
+  if (!content) throw new Error(`LLM response missing message content: ${JSON.stringify(data).slice(0, 500)}`);
   return content;
 }
 
-export async function evaluateKeywordRowsWithOpenAI(items, { apiKey = process.env.OPENAI_API_KEY || "", model = process.env.OPENAI_MODEL || DEFAULT_MODEL } = {}) {
+function responseFormatFor(provider) {
+  return provider === "deepseek"
+    ? { type: "json_object" }
+    : { type: "json_schema", json_schema: OUTPUT_SCHEMA };
+}
+
+export async function evaluateKeywordRowsWithLLM(items, { provider = "", apiKey = "", model = "" } = {}) {
   if (items.length === 0) return [];
-  if (!apiKey) throw new Error("缺少 OPENAI_API_KEY。要用大模型 agent，请先设置 OPENAI_API_KEY，或用 --mode=rules 跑规则兜底。");
+  const config = resolveKeywordAgentLLMConfig({ provider, model });
+  const resolvedApiKey = apiKey || config.apiKey;
+  if (!resolvedApiKey) {
+    const envName = config.provider === "deepseek" ? "DEEPSEEK_API_KEY" : "OPENAI_API_KEY";
+    throw new Error(`缺少 ${envName}。要用大模型 agent，请先设置 ${envName}，或用 --mode=rules 跑规则兜底。`);
+  }
   const payload = buildPromptPayload(items);
-  const response = await fetch("https://api.openai.com/v1/chat/completions", { method: "POST", headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "system", content: KEYWORD_AGENT_SYSTEM_PROMPT }, { role: "user", content: JSON.stringify(payload) }], response_format: { type: "json_schema", json_schema: OUTPUT_SCHEMA } }) });
+  const response = await fetch(`${config.baseUrl}/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${resolvedApiKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: config.model, messages: [{ role: "system", content: KEYWORD_AGENT_SYSTEM_PROMPT }, { role: "user", content: JSON.stringify(payload) }], response_format: responseFormatFor(config.provider) }) });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(`OpenAI API failed: HTTP ${response.status} ${data?.error?.message || response.statusText}`);
+  if (!response.ok) throw new Error(`${config.provider} API failed: HTTP ${response.status} ${data?.error?.message || response.statusText}`);
   const parsed = JSON.parse(extractJsonContent(data));
   const decisions = Array.isArray(parsed.decisions) ? parsed.decisions : [];
   const byRow = new Map(decisions.map((decision) => [Number(decision.rowNumber), decision]));
@@ -200,4 +238,8 @@ export async function evaluateKeywordRowsWithOpenAI(items, { apiKey = process.en
     if (!decision) throw new Error(`OpenAI response missing decision for row ${item.rowNumber}`);
     return validateLLMOutput(item, decision, normalizeCustomerConfig(item));
   });
+}
+
+export function evaluateKeywordRowsWithOpenAI(items, options = {}) {
+  return evaluateKeywordRowsWithLLM(items, { ...options, provider: "openai" });
 }

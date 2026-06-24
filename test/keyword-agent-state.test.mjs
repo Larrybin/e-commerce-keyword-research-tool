@@ -27,7 +27,8 @@ function keywordRow(rowNumber, record) {
 const keywordTableHeaders = [
   "词根",
   "关键词",
-  "bing二次判断",
+  "agent预判断",
+  "SERP机会判断",
   "意图",
   "第一次判断",
   "难度",
@@ -43,7 +44,8 @@ const keywordTableHeaders = [
 function keywordTableRow(rowNumber, {
   root = "generator",
   keyword = `keyword ${rowNumber}`,
-  bingSecond = "继续",
+  prefilter = "继续",
+  serpOpportunity = "继续",
   intent = "",
   firstJudgement = "",
   difficulty = "",
@@ -58,7 +60,8 @@ function keywordTableRow(rowNumber, {
   const values = [
     root,
     keyword,
-    bingSecond,
+    prefilter,
+    serpOpportunity,
     intent,
     firstJudgement,
     difficulty,
@@ -81,7 +84,8 @@ test("keyword agent validates headers without optional agent status column", () 
   assert.doesNotThrow(() => validateHeaders([
     "词根",
     "关键词",
-    "bing二次判断",
+    "agent预判断",
+    "SERP机会判断",
     "购买意图",
     "产品类型",
     "建议",
@@ -297,6 +301,43 @@ test("keyword agent pending limit is not consumed by completed rows", () => {
   assert.equal(result.pending.length, 1);
   assert.equal(result.pending[0].keyword, "actual pending generator");
   assert.equal(result.summaries.some((summary) => summary.reason === "agent_status_done"), true);
+});
+
+test("keyword agent accepts SERP opportunity rows", () => {
+  const ruleIndex = buildRuleIndex({
+    rows: [taskRow(3, { "词根": "generator", "意图": "工具站" })]
+  });
+
+  const result = collectKeywordAgentPendingRows({
+    keywordTable: {
+      headers: keywordTableHeaders,
+      rows: [keywordTableRow(12, { keyword: "opportunity generator", serpOpportunity: "机会" })]
+    },
+    ruleIndex,
+    limit: 1,
+    force: false
+  });
+
+  assert.equal(result.pending.length, 1);
+  assert.equal(result.pending[0].keyword, "opportunity generator");
+});
+
+test("keyword agent requires agent prefilter to continue", () => {
+  const ruleIndex = buildRuleIndex({
+    rows: [taskRow(3, { "词根": "generator", "意图": "工具站" })]
+  });
+
+  const result = collectKeywordAgentPendingRows({
+    keywordTable: {
+      headers: keywordTableHeaders,
+      rows: [keywordTableRow(12, { keyword: "barcode generator", prefilter: "拒绝" })]
+    },
+    ruleIndex,
+    limit: 1,
+    force: false
+  });
+
+  assert.equal(result.pending.length, 0);
 });
 
 test("keyword agent skips terminal rows before duplicate rule lookup", () => {

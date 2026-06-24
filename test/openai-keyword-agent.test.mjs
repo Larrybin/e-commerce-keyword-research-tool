@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AGENT_STATUS_COLUMN, KEYWORD_AGENT_SYSTEM_PROMPT, buildPromptPayload, normalizeDecision, validateLLMOutput } from "../src/lib/openai-keyword-agent.mjs";
+import { AGENT_STATUS_COLUMN, KEYWORD_AGENT_SYSTEM_PROMPT, buildPromptPayload, normalizeDecision, resolveKeywordAgentLLMConfig, validateLLMOutput } from "../src/lib/openai-keyword-agent.mjs";
 
 test("system prompt documents ecommerce and B2B judgement rules", () => {
   for (const expected of ["电子商务 + B端", "实体商品", "配件耗材", "supplier", "manufacturer", "目标模式 / 可售品类", "购买意图", "产品类型", "不能按工具站逻辑排除", "counterfeit", "replica"]) {
@@ -14,6 +14,43 @@ test("prompt payload uses target mode and sellable category rule columns", () =>
   assert.deepEqual(payload.rules.ruleColumns, ["目标模式", "可售品类"]);
   assert.deepEqual(payload.rows[0].customerConfig.targetModes, ["电商", "B端"]);
   assert.equal(payload.rows[0].customerConfig.sellableCategories, "parts, accessories");
+});
+
+test("LLM config defaults to DeepSeek and can select OpenAI", () => {
+  const originalProvider = process.env.KEYWORD_AGENT_LLM_PROVIDER;
+  const originalAgentModel = process.env.KEYWORD_AGENT_MODEL;
+  const originalDeepSeekModel = process.env.DEEPSEEK_MODEL;
+  const originalOpenAIModel = process.env.OPENAI_MODEL;
+  delete process.env.KEYWORD_AGENT_LLM_PROVIDER;
+  delete process.env.KEYWORD_AGENT_MODEL;
+  delete process.env.DEEPSEEK_MODEL;
+  delete process.env.OPENAI_MODEL;
+  try {
+    assert.deepEqual(
+      {
+        provider: resolveKeywordAgentLLMConfig().provider,
+        model: resolveKeywordAgentLLMConfig().model
+      },
+      { provider: "deepseek", model: "deepseek-v4-flash" }
+    );
+    process.env.OPENAI_MODEL = "gpt-test";
+    assert.deepEqual(
+      {
+        provider: resolveKeywordAgentLLMConfig({ provider: "openai" }).provider,
+        model: resolveKeywordAgentLLMConfig({ provider: "openai" }).model
+      },
+      { provider: "openai", model: "gpt-test" }
+    );
+  } finally {
+    if (originalProvider === undefined) delete process.env.KEYWORD_AGENT_LLM_PROVIDER;
+    else process.env.KEYWORD_AGENT_LLM_PROVIDER = originalProvider;
+    if (originalAgentModel === undefined) delete process.env.KEYWORD_AGENT_MODEL;
+    else process.env.KEYWORD_AGENT_MODEL = originalAgentModel;
+    if (originalDeepSeekModel === undefined) delete process.env.DEEPSEEK_MODEL;
+    else process.env.DEEPSEEK_MODEL = originalDeepSeekModel;
+    if (originalOpenAIModel === undefined) delete process.env.OPENAI_MODEL;
+    else process.env.OPENAI_MODEL = originalOpenAIModel;
+  }
 });
 
 test("normalizer writes excluded ecommerce rows with new fields and status", () => {

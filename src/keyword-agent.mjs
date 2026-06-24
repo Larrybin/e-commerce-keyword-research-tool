@@ -19,11 +19,18 @@ import {
   createNoopResearchProvider
 } from "./lib/keyword-research-provider.mjs";
 import { detectResearchNeeds } from "./lib/keyword-research-boundary.mjs";
-import { evaluateKeywordRowsWithOpenAI } from "./lib/openai-keyword-agent.mjs";
+import {
+  evaluateKeywordRowsWithLLM,
+  resolveKeywordAgentLLMConfig
+} from "./lib/openai-keyword-agent.mjs";
+import {
+  KEYWORD_TOTAL_SHEET,
+  keywordTotalReadRange
+} from "./lib/sheet-write.mjs";
 
 const TASK_SHEET = "词根拓展";
-const KEYWORD_TOTAL_SHEET = "关键词总表";
 const DEFAULT_LIMIT = 20;
+const PREFILTER_COLUMN = "agent预判断";
 
 export { AGENT_STATUS_COLUMN };
 
@@ -68,8 +75,8 @@ function countRows(rows) {
   return Array.isArray(rows) ? rows.length : Number(rows || 0);
 }
 
-function resolvedModelName(mode, model) {
-  return isRulesMode(mode) ? "" : (model || process.env.OPENAI_MODEL || "gpt-5.4-mini");
+function resolvedLLMConfig(mode, provider, model) {
+  return isRulesMode(mode) ? { provider: "", model: "" } : resolveKeywordAgentLLMConfig({ provider, model });
 }
 
 function summarizeRule(rule = {}) {
@@ -110,6 +117,7 @@ export function buildPlanOnlySummary({
   taskSheet = TASK_SHEET,
   keywordSheet = KEYWORD_TOTAL_SHEET,
   mode = "llm",
+  llmProvider = "",
   model = "",
   dryRun = false,
   force = false,
@@ -126,13 +134,15 @@ export function buildPlanOnlySummary({
   headerDiagnostics = null,
   ranAt = new Date().toISOString()
 } = {}) {
+  const llmConfig = resolvedLLMConfig(mode, llmProvider, model);
   const plannedRows = pending.map((item) => {
     const planRow = {
       row: item.rowNumber,
       keyword: item.keyword,
       status: "planned",
       mode,
-      model: resolvedModelName(mode, model),
+      llmProvider: llmConfig.provider,
+      model: llmConfig.model,
       wouldEvaluate: true,
       wouldWrite: false,
       force,
@@ -165,7 +175,8 @@ export function buildPlanOnlySummary({
       planOnly: true,
       force,
       mode,
-      model: resolvedModelName(mode, model),
+      llmProvider: llmConfig.provider,
+      model: llmConfig.model,
       limit,
       fromRow,
       toRow,
@@ -255,7 +266,8 @@ export function validateHeaders(headers) {
   const required = [
     "词根",
     "关键词",
-    "bing二次判断",
+    PREFILTER_COLUMN,
+    "SERP机会判断",
     ...targetAgentColumns()
   ];
   const normalized = new Set(headers.map((header) => String(header || "").trim()));
@@ -274,7 +286,9 @@ export function collectKeywordAgentPendingRows({
   force = false,
   duplicateRule = "error"
 }) {
-  const bingSecondIndex = normalizedHeaderIndex(keywordTable.headers, "bing二次判断");
+  const serpOpportunityIndex = normalizedHeaderIndex(keywordTable.headers, "SERP机会判断");
+  const prefilterIndex = normalizedHeaderIndex(keywordTable.headers, PREFILTER_COLUMN);
+  const bingFirstIndex = optionalNormalizedHeaderIndex(keywordTable.headers, "bing初步判断");
   const keywordIndex = normalizedHeaderIndex(keywordTable.headers, "关键词");
   const selectedRows = [];
   const pending = [];
@@ -291,8 +305,16 @@ export function collectKeywordAgentPendingRows({
     if (!keyword) {
       continue;
     }
-    const bingSecond = String(row.values[bingSecondIndex] || "").trim();
-    if (bingSecond !== "继续") {
+    const prefilter = String(row.values[prefilterIndex] || "").trim();
+    if (prefilter !== "继续") {
+      continue;
+    }
+    const serpOpportunity = String(row.values[serpOpportunityIndex] || "").trim();
+    if (serpOpportunity !== "继续" && serpOpportunity !== "机会") {
+      continue;
+    }
+    const bingFirst = bingFirstIndex === -1 ? "" : String(row.values[bingFirstIndex] || "").trim();
+    if (bingFirst === "拒绝") {
       continue;
     }
     selectedRows.push(row);
@@ -453,7 +475,8 @@ async function main() {
   const force = readFlag("force");
   const duplicateRule = readArg("duplicate-rule", "error");
   const mode = readArg("mode", "llm");
-  const model = readArg("model", process.env.OPENAI_MODEL || "");
+  const llmProvider = readArg("llm-provider", process.env.KEYWORD_AGENT_LLM_PROVIDER || "");
+  const model = readArg("model", process.env.KEYWORD_AGENT_MODEL || "");
   const out = readArg("out", "output/keyword-agent/last-run-summary.json");
   const writeDelayMs = Number(readArg("write-delay-ms", "1200")) || 1200;
   const researchEnabled = readFlag("research");
@@ -463,7 +486,7 @@ async function main() {
 
   const [taskTable, keywordTable] = await Promise.all([
     readRequiredSheet(sheetUrl, `${TASK_SHEET}!A:S`),
-    readRequiredSheet(sheetUrl, `${KEYWORD_TOTAL_SHEET}!A:AZ`)
+    readRequiredSheet(sheetUrl, keywordTotalReadRange())
   ]);
 
   validateHeaders(keywordTable.headers);
@@ -485,6 +508,7 @@ async function main() {
   const researchIgnoredInRulesMode = researchEnabled && isRulesMode(mode);
   const researchProviderMissing = researchEnabled && !dryRun && !researchIgnoredInRulesMode && !researchEndpoint;
   let researchProviderName = "";
+  const llmConfig = resolvedLLMConfig(mode, llmProvider, model);
 
   if (planOnly) {
     const summary = buildPlanOnlySummary({
@@ -492,6 +516,7 @@ async function main() {
       taskSheet: TASK_SHEET,
       keywordSheet: KEYWORD_TOTAL_SHEET,
       mode,
+      llmProvider,
       model,
       dryRun,
       force,
@@ -538,7 +563,7 @@ async function main() {
         modelRationale: "",
         warnings: []
       }))
-    : await evaluateKeywordRowsWithOpenAI(pending, { model: model || undefined });
+    : await evaluateKeywordRowsWithLLM(pending, { provider: llmProvider || undefined, model: model || undefined });
   const evaluationByRow = new Map(evaluations.map((evaluation) => [Number(evaluation.rowNumber), evaluation]));
 
   for (const item of pending) {
@@ -587,7 +612,8 @@ async function main() {
       keyword,
       status: dryRun ? "dry-run" : "updated",
       mode,
-      model: resolvedModelName(mode, model),
+      llmProvider: llmConfig.provider,
+      model: llmConfig.model,
       changed: update.changed,
       values: update.writableValues,
       proposedValues: update.proposedValues,
@@ -613,7 +639,8 @@ async function main() {
       planOnly: false,
       force,
       mode,
-      model: resolvedModelName(mode, model),
+      llmProvider: llmConfig.provider,
+      model: llmConfig.model,
       writeDelayMs,
       limit,
       fromRow,
