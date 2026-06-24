@@ -10,9 +10,10 @@ import {
 import { rowsToObjects } from "./csv.mjs";
 import { getGid, getSpreadsheetId } from "./google-sheet.mjs";
 import { getSheetValues } from "./google-sheets-api.mjs";
+import { KEYWORD_TOTAL_READ_COLUMNS } from "./sheet-write.mjs";
 
 export const DEFAULT_SHEET_URL =
-  "https://docs.google.com/spreadsheets/d/1Ea3mSRW431QP08sq9tn3VoYEkj52hNRzY_GVizVLy3A/edit?gid=0#gid=0";
+  "https://docs.google.com/spreadsheets/d/1zPTig9pqL-AOiwnBUOXPpx72ZRpZbu0LKi37mK8YK_U/edit?gid=0#gid=0";
 
 export function buildProfileWorkUrl(sheetUrl) {
   const url = new URL(sheetUrl);
@@ -37,10 +38,10 @@ function quoteSheetName(sheetName) {
   return `'${String(sheetName).replaceAll("'", "''")}'`;
 }
 
-async function readSheetWithApi({ sheetUrl, sheetName, expectedHeaders = [] }) {
+async function readSheetWithApi({ sheetUrl, sheetName, expectedHeaders = [], columns = "A:Z" }) {
   const result = await getSheetValues({
     sheetUrl,
-    range: `${quoteSheetName(sheetName)}!A:Z`
+    range: `${quoteSheetName(sheetName)}!${columns}`
   });
   if (!result.ok) {
     throw new Error(`读取 ${sheetName} 失败: ${result.reason || "unknown error"}`);
@@ -107,6 +108,11 @@ export function pickKeywordTask(keywordRows, rowNumber = 2) {
     throw new Error(`Spreadsheet row ${rowNumber} has neither 词根 nor 关键词`);
   }
 
+  const valueOrDefault = (value, fallback) => {
+    const text = (value || "").trim();
+    return text || fallback;
+  };
+
   return {
     rowNumber,
     row,
@@ -114,12 +120,12 @@ export function pickKeywordTask(keywordRows, rowNumber = 2) {
     mode: rootKeyword ? "root" : "keyword",
     rootKeyword,
     keyword,
-    matchType: (row["匹配类型"] || "").trim(),
+    matchType: valueOrDefault(row["匹配类型"], "词组匹配"),
     matchCountry: (row["匹配国家"] || "").trim(),
-    volumeMin: (row["搜索量范围（小）"] || "").trim(),
+    volumeMin: valueOrDefault(row["搜索量范围（小）"], "1000"),
     volumeMax: (row["搜索量范围（大）"] || "").trim(),
-    kdMin: (row["KD范围（小）"] || "").trim(),
-    kdMax: (row["KD范围（大）"] || "").trim(),
+    kdMin: valueOrDefault(row["KD范围（小）"], "0"),
+    kdMax: valueOrDefault(row["KD范围（大）"], "60"),
     machineFilter: (row["是否进行机器筛选"] || row["进行机器筛选"] || "").trim()
   };
 }
@@ -175,6 +181,7 @@ export async function readToolConfig(cdp, options) {
     const keywordTotalSheet = await readSheetWithApi({
       sheetUrl,
       sheetName: keywordTotalSheetName,
+      columns: KEYWORD_TOTAL_READ_COLUMNS,
       expectedHeaders: ["词根", "关键词", "国家", "搜索量", "KD"]
     });
 

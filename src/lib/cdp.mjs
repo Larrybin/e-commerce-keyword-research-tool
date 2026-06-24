@@ -1,7 +1,8 @@
 import fs from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const DEFAULT_ACTIVE_PORT_FILES = [
   "Library/Application Support/Google/Chrome/DevToolsActivePort",
@@ -11,6 +12,9 @@ const DEFAULT_ACTIVE_PORT_FILES = [
 ];
 
 const FALLBACK_DEBUGGING_PORTS = ["9222", "9333"];
+const MACOS_CHROME_REMOTE_DEBUGGING_ALLOW_CLICKER = fileURLToPath(
+  new URL("../../scripts/click-chrome-remote-debugging-allow.applescript", import.meta.url)
+);
 
 export function readDebuggerEndpointFromPort(port) {
   try {
@@ -25,6 +29,29 @@ export function readDebuggerEndpointFromPort(port) {
     return JSON.parse(output).webSocketDebuggerUrl || "";
   } catch {
     return "";
+  }
+}
+
+function startMacChromeRemoteDebuggingAllowClicker() {
+  if (
+    process.platform !== "darwin" ||
+    process.env.CHROME_AUTO_ALLOW_REMOTE_DEBUGGING === "0" ||
+    !fs.existsSync(MACOS_CHROME_REMOTE_DEBUGGING_ALLOW_CLICKER)
+  ) {
+    return null;
+  }
+
+  const child = spawn("osascript", [MACOS_CHROME_REMOTE_DEBUGGING_ALLOW_CLICKER], {
+    stdio: "ignore"
+  });
+  child.on("error", () => {});
+  child.unref();
+  return child;
+}
+
+function stopMacChromeRemoteDebuggingAllowClicker(child) {
+  if (child && child.exitCode === null && child.signalCode === null && !child.killed) {
+    child.kill();
   }
 }
 
@@ -77,45 +104,50 @@ export class CdpClient {
     this.eventHandlers = new Map();
   }
 
-	  async connect() {
-	    this.ws = new WebSocket(this.webSocketUrl);
-	    this.ws.addEventListener("message", (event) => {
-	      const message = JSON.parse(event.data);
-	      if (message.id && this.pending.has(message.id)) {
-	        const { resolve, reject, timer } = this.pending.get(message.id);
-	        this.pending.delete(message.id);
-	        clearTimeout(timer);
-	        if (message.error) {
-	          reject(new Error(message.error.message));
-	        } else {
-          resolve(message.result ?? {});
+  async connect() {
+    const allowClicker = startMacChromeRemoteDebuggingAllowClicker();
+    try {
+      this.ws = new WebSocket(this.webSocketUrl);
+      this.ws.addEventListener("message", (event) => {
+        const message = JSON.parse(event.data);
+        if (message.id && this.pending.has(message.id)) {
+          const { resolve, reject, timer } = this.pending.get(message.id);
+          this.pending.delete(message.id);
+          clearTimeout(timer);
+          if (message.error) {
+            reject(new Error(message.error.message));
+          } else {
+            resolve(message.result ?? {});
+          }
+          return;
         }
-        return;
-      }
 
-      const handlers = this.eventHandlers.get(message.method);
-      if (handlers) {
-        handlers.forEach((handler) => handler({
-          ...(message.params ?? {}),
-          sessionId: message.sessionId
-        }));
-      }
-    });
+        const handlers = this.eventHandlers.get(message.method);
+        if (handlers) {
+          handlers.forEach((handler) => handler({
+            ...(message.params ?? {}),
+            sessionId: message.sessionId
+          }));
+        }
+      });
 
-	    await new Promise((resolve, reject) => {
-	      const timer = setTimeout(() => {
-	        reject(new Error("Timed out connecting to Chrome CDP WebSocket"));
-	      }, 15000);
-	      this.ws.addEventListener("open", () => {
-	        clearTimeout(timer);
-	        resolve();
-	      }, { once: true });
-	      this.ws.addEventListener("error", (error) => {
-	        clearTimeout(timer);
-	        reject(error);
-	      }, { once: true });
-	    });
-	  }
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error("Timed out connecting to Chrome CDP WebSocket"));
+        }, 15000);
+        this.ws.addEventListener("open", () => {
+          clearTimeout(timer);
+          resolve();
+        }, { once: true });
+        this.ws.addEventListener("error", (error) => {
+          clearTimeout(timer);
+          reject(error);
+        }, { once: true });
+      });
+    } finally {
+      stopMacChromeRemoteDebuggingAllowClicker(allowClicker);
+    }
+  }
 
 	  send(method, params = {}, sessionId) {
 	    const id = this.nextId;

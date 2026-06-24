@@ -204,6 +204,177 @@ export async function navigateToKeywordOverview(cdp, sessionId, query, country =
   await sleep(5000);
 }
 
+const KEYWORD_MAGIC_MATCH_TYPES = {
+  所有关键词: "all",
+  广泛匹配: "broad",
+  词组匹配: "phrase",
+  完全匹配: "exact",
+  相关性: "related"
+};
+
+export function buildKeywordMagicUrl(currentUrl, {
+  query,
+  country = "",
+  matchType = "",
+  volumeMin = "",
+  volumeMax = "",
+  kdMin = "",
+  kdMax = ""
+}) {
+  const current = new URL(currentUrl);
+  const next = new URL("/analytics/keywordmagic/", current.origin);
+  next.searchParams.set("q", query);
+  next.searchParams.set("db", countryDatabaseCode(country) || "us");
+
+  const type = KEYWORD_MAGIC_MATCH_TYPES[matchType];
+  if (type && type !== "all") {
+    next.searchParams.set("type", type);
+  }
+
+  const filter = structuredClone(EMPTY_KEYWORD_MAGIC_FILTER);
+  filter.volume = buildNumericFilterEntries(volumeMin, volumeMax);
+  filter.difficulty = buildNumericFilterEntries(kdMin, kdMax);
+  if (filter.volume.length > 0 || filter.difficulty.length > 0) {
+    next.searchParams.set("filter", encodeKeywordMagicFilter(filter));
+  }
+
+  const gmitm = current.searchParams.get("__gmitm");
+  if (gmitm) {
+    next.searchParams.set("__gmitm", gmitm);
+  }
+  return next.toString();
+}
+
+export async function navigateToKeywordMagic(cdp, sessionId, task) {
+  const currentUrl = await evaluate(cdp, sessionId, "location.href");
+  await navigateAndWait(cdp, sessionId, buildKeywordMagicUrl(currentUrl, task), 45000).catch(async () => {
+    await sleep(4000);
+  });
+  await sleep(7000);
+}
+
+function keywordMagicApiMode(type) {
+  return type === "phrase" ? 1 : null;
+}
+
+export function buildKeywordMagicApiPayload(currentUrl, { page = 1, pageSize = 100 } = {}) {
+  const url = new URL(currentUrl);
+  if (!url.pathname.includes("/analytics/keywordmagic/")) {
+    return null;
+  }
+
+  const phrase = (url.searchParams.get("q") || "").trim();
+  const mode = keywordMagicApiMode(url.searchParams.get("type") || "all");
+  if (!phrase || mode === null) {
+    return null;
+  }
+
+  return {
+    id: page,
+    jsonrpc: "2.0",
+    method: "ideas.GetKeywords",
+    params: {
+      mode,
+      currency: "USD",
+      database: url.searchParams.get("db") || "us",
+      filter: decodeKeywordMagicFilter(url.searchParams.get("filter") || ""),
+      groups: [],
+      order: { direction: 1, field: "volume" },
+      groups_order: { direction: 1, field: "count" },
+      phrase,
+      questions_only: false,
+      page: { number: page, size: pageSize }
+    }
+  };
+}
+
+function formatKeywordMagicApiVolume(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return String(value || "");
+  }
+  if (number >= 1000000) {
+    return `${(number / 1000000).toFixed(1)}M`;
+  }
+  if (number >= 1000) {
+    return `${(number / 1000).toFixed(1)}K`;
+  }
+  return String(number);
+}
+
+export function keywordMagicApiKeywordsToRows(keywords, context = {}) {
+  return (Array.isArray(keywords) ? keywords : [])
+    .map((item) => ({
+      root: context.root || "",
+      source_query: context.query || "",
+      keyword: item?.phrase || "",
+      volume: formatKeywordMagicApiVolume(item?.volume),
+      kd: item?.difficulty === undefined || item?.difficulty === null ? "" : String(item.difficulty),
+      semrush_page: Number(context.page || 1)
+    }))
+    .filter((row) => row.keyword && row.volume && row.kd);
+}
+
+export async function fetchKeywordMagicRowsViaPageApi(cdp, sessionId, context) {
+  const currentUrl = await evaluate(cdp, sessionId, "location.href");
+  const page = Number(context.page || 1);
+  const pageSize = Number(context.pageSize || 100);
+  const payload = buildKeywordMagicApiPayload(currentUrl, { page, pageSize });
+  if (!payload) {
+    return { ok: false, reason: "unsupported_keyword_magic_api_url" };
+  }
+
+  const apiUrl = new URL("/kmtgw/v2/webapi", currentUrl);
+  const gmitm = new URL(currentUrl).searchParams.get("__gmitm");
+  if (gmitm) {
+    apiUrl.searchParams.set("__gmitm", gmitm);
+  }
+
+  const response = await evaluate(
+    cdp,
+    sessionId,
+    `(async () => {
+      const response = await fetch(${JSON.stringify(apiUrl.toString())}, {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body: ${JSON.stringify(JSON.stringify(payload))}
+      });
+      const text = await response.text();
+      let data = null;
+      try {
+        data = JSON.parse(text);
+      } catch {}
+      return { ok: response.ok, status: response.status, data, text: data ? "" : text.slice(0, 500) };
+    })()`,
+    45000
+  );
+
+  if (!response.ok) {
+    return { ok: false, reason: `keyword_magic_api_http_${response.status}` };
+  }
+  const keywords = response.data?.result?.keywords;
+  if (!Array.isArray(keywords)) {
+    return { ok: false, reason: response.data?.error?.message || "keyword_magic_api_missing_keywords" };
+  }
+
+  return {
+    ok: true,
+    rows: keywordMagicApiKeywordsToRows(keywords, {
+      root: context.root,
+      query: context.query || payload.params.phrase,
+      page
+    }),
+    pageSize,
+    rawKeywordCount: keywords.length,
+    pagination: {
+      currentPage: page,
+      totalPages: null,
+      text: "keyword_magic_api"
+    }
+  };
+}
+
 function parseCompactNumberText(value) {
   const normalized = String(value || "")
     .replace(/,/g, "")

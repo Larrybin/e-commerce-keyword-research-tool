@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { readArg, readFlag } from "./lib/args.mjs";
@@ -10,14 +11,14 @@ import {
   detachChromePage,
   navigateAndWait,
   readChromeWebSocketEndpoint,
+  readDebuggerEndpointFromPort,
   waitForChromeTargetWithCdp
 } from "./lib/cdp.mjs";
 import { ensureChromeProfileTargetWithCdp } from "./lib/chrome-profiles.mjs";
 import { sleep } from "./lib/browser-actions.mjs";
 import { writeCsv, writeJson } from "./lib/files.mjs";
 import {
-  getSpreadsheetId,
-  readSheetInSession
+  getSpreadsheetId
 } from "./lib/google-sheet.mjs";
 import {
   batchUpdateSheet,
@@ -27,7 +28,14 @@ import {
 } from "./lib/google-sheets-api.mjs";
 import {
   buildKeywordTotalValues,
+  buildKeywordTotalSourceValues,
+  existingKeywordTotalKeys,
+  filterDuplicateKeywordRows,
+  findKeywordTotalAppendStartRow,
   isKeywordTotalHeaderRow,
+  keywordTotalBaseWriteRange,
+  keywordTotalReadRange,
+  keywordTotalSourceColumnIndex,
   KEYWORD_TOTAL_HEADERS
 } from "./lib/sheet-write.mjs";
 import {
@@ -38,7 +46,7 @@ import {
   taskRunKey,
   toOutputRows
 } from "./lib/task-batch.mjs";
-import { filterKeywordRowsForToolSites } from "./lib/keyword-filter.mjs";
+import { filterKeywordRowsForEcommerce } from "./lib/keyword-filter.mjs";
 import {
   DEFAULT_SHEET_URL,
   pickKeywordTask,
@@ -47,23 +55,25 @@ import {
 import {
   applyRangeFilter,
   clickNextPage,
-  clickViewAllKeywords,
   closeSemrushCoachmark,
   countryDatabaseCode,
   detectPage,
   ensureFirstKeywordMagicPage,
   extractKeywordOverviewMetrics,
   extractKeywordRows,
+  fetchKeywordMagicRowsViaPageApi,
   loginDash,
+  navigateToKeywordMagic,
   navigateToKeywordOverview,
   openSemrushFromDash,
-  searchKeywordMagicInPlace,
   searchSemrush,
   selectMatchType,
   validateMagicPhrase
 } from "./lib/semrush-page.mjs";
 
 const DASH_LOGIN_URL = "https://dash.3ue.com/zh-Hans/#/login";
+const MANAGED_CHROME_PORT = "9333";
+const CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 async function readJsonIfExists(filePath, fallback) {
   try {
@@ -150,29 +160,40 @@ async function collectAllKeywordPages(cdp, sessionId, task, maxPages) {
   let page = 1;
 
   while (page <= maxPages) {
-    const result = await extractKeywordRows(cdp, sessionId, {
+    let result = await fetchKeywordMagicRowsViaPageApi(cdp, sessionId, {
       root: task.rootKeyword,
       query: task.query,
       page
-    });
-	    if (!result.ok) {
-	      throw new Error(result.reason || "Unable to extract keyword rows");
-	    }
+    }).catch((error) => ({ ok: false, reason: error.message }));
+    const usedApi = result.ok;
+
+    if (!result.ok) {
+      result = await extractKeywordRows(cdp, sessionId, {
+        root: task.rootKeyword,
+        query: task.query,
+        page
+      });
+    }
+    if (!result.ok) {
+      throw new Error(result.reason || "Unable to extract keyword rows");
+    }
     if (result.filteredKeywordCount) {
       filteredKeywordCount = result.filteredKeywordCount;
     }
 
-	    for (const row of result.rows) {
-	      const key = `${row.keyword}\t${row.volume}\t${row.kd}`;
-	      if (!seen.has(key)) {
-	        seen.add(key);
-	        allRows.push(row);
-	      }
-	    }
+    let newRows = 0;
+    for (const row of result.rows) {
+      const key = `${row.keyword}\t${row.volume}\t${row.kd}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        allRows.push(row);
+        newRows += 1;
+      }
+    }
     const currentPage = result.pagination?.currentPage || page;
     const totalPages = result.pagination?.totalPages || null;
     const pageLabel = totalPages ? `${currentPage}/${totalPages}` : String(currentPage);
-    console.log(`Collect page ${pageLabel}: ${result.rows.length} row(s), ${allRows.length} total unique row(s).`);
+    console.log(`Collect page ${pageLabel}${usedApi ? " via API" : ""}: ${result.rows.length} row(s), ${allRows.length} total unique row(s).`);
 
     if (totalPages && currentPage >= totalPages) {
       break;
@@ -180,9 +201,16 @@ async function collectAllKeywordPages(cdp, sessionId, task, maxPages) {
     if (totalPages && page >= totalPages) {
       break;
     }
+    if (usedApi) {
+      if (result.rawKeywordCount < result.pageSize || result.rows.length === 0 || newRows === 0) {
+        break;
+      }
+      page += 1;
+      continue;
+    }
 
-	    const hasNext = await clickNextPage(cdp, sessionId);
-	    if (!hasNext) {
+    const hasNext = await clickNextPage(cdp, sessionId);
+    if (!hasNext) {
       break;
     }
     page += 1;
@@ -276,6 +304,57 @@ async function approveRemoteDebuggingPrompt() {
       return "not-found"
     end tell`
   ]).catch((error) => `error:${error.message}`);
+}
+
+async function launchManagedChromeCdp() {
+  if (process.env.CHROME_REMOTE_DEBUGGING_PORT || process.env.CHROME_USER_DATA_DIR) {
+    return null;
+  }
+
+  const existingEndpoint = readDebuggerEndpointFromPort(MANAGED_CHROME_PORT);
+  if (existingEndpoint) {
+    process.env.CHROME_REMOTE_DEBUGGING_PORT = MANAGED_CHROME_PORT;
+    console.log(`Using existing Chrome CDP on port ${MANAGED_CHROME_PORT}.`);
+    return null;
+  }
+
+  const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ecommerce-keyword-chrome-"));
+  const child = spawn(CHROME_BIN, [
+    `--user-data-dir=${userDataDir}`,
+    `--remote-debugging-port=${MANAGED_CHROME_PORT}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "about:blank"
+  ], {
+    detached: true,
+    stdio: "ignore"
+  });
+  child.unref();
+
+  for (let attempt = 1; attempt <= 20; attempt += 1) {
+    if (readDebuggerEndpointFromPort(MANAGED_CHROME_PORT)) {
+      process.env.CHROME_REMOTE_DEBUGGING_PORT = MANAGED_CHROME_PORT;
+      console.log(`Started isolated Chrome CDP on port ${MANAGED_CHROME_PORT}.`);
+      return { child, userDataDir };
+    }
+    await sleep(500);
+  }
+
+  child.kill("SIGTERM");
+  await fs.rm(userDataDir, { recursive: true, force: true });
+  throw new Error(`Timed out starting isolated Chrome CDP on port ${MANAGED_CHROME_PORT}`);
+}
+
+async function cleanupManagedChromeCdp(cdp, managedChrome) {
+  if (!managedChrome) {
+    return;
+  }
+  await cdp?.send("Browser.close").catch(() => {});
+  managedChrome.child.kill("SIGTERM");
+  await sleep(500);
+  await fs.rm(managedChrome.userDataDir, { recursive: true, force: true }).catch((error) => {
+    console.warn(`Unable to remove temporary Chrome profile ${managedChrome.userDataDir}: ${error.message}`);
+  });
 }
 
 async function connectChromeCdpWithRecovery() {
@@ -375,15 +454,16 @@ async function pasteRowsToKeywordTotalSheet(cdp, sheetPage, sheetUrl, sheetName,
   const gid = gidOverride || await resolveSheetGid(cdp, sheetPage.sessionId, sheetName);
   const existing = await getSheetValues({
     sheetUrl,
-    range: `${sheetName}!A:F`
+    range: keywordTotalReadRange(sheetName)
   });
   if (!existing.ok) {
     throw new Error(`读取 ${sheetName} 失败: ${existing.reason || "unknown error"}`);
   }
 
-  const hasHeader = isKeywordTotalHeaderRow(existing.values[0]);
+  const headers = existing.values[0] || KEYWORD_TOTAL_HEADERS;
+  const hasHeader = existing.values.length > 0 && isKeywordTotalHeaderRow(headers);
   if (existing.values.length > 0 && !hasHeader) {
-    throw new Error(`${sheetName} 表头损坏或缺失，停止写入以避免覆盖旧数据。请先恢复 A1:F1 表头。`);
+    throw new Error(`${sheetName} 缺少必要表头，停止写入以避免覆盖旧数据。当前表头: ${headers.join(", ")}`);
   }
 
   if (!hasHeader) {
@@ -397,17 +477,42 @@ async function pasteRowsToKeywordTotalSheet(cdp, sheetPage, sheetUrl, sheetName,
     }
   }
 
-  const startRow = hasHeader ? existing.values.length + 1 : 2;
-  const endRow = startRow + rows.length - 1;
-  const range = `A${startRow}:F${endRow}`;
+  const duplicateFilter = filterDuplicateKeywordRows(rows, existingKeywordTotalKeys(existing.values));
+  const newRows = duplicateFilter.kept;
+  if (newRows.length === 0) {
+    return {
+      skipped: true,
+      reason: "all_keywords_duplicate",
+      duplicateRows: duplicateFilter.skipped.length
+    };
+  }
+
+  const startRow = findKeywordTotalAppendStartRow({
+    headers,
+    rawRows: hasHeader ? existing.values : [KEYWORD_TOTAL_HEADERS]
+  });
+  const endRow = startRow + newRows.length - 1;
+  const range = keywordTotalBaseWriteRange(startRow, endRow, sheetName, headers).replace(`${sheetName}!`, "");
+  const sourceColumnIndex = keywordTotalSourceColumnIndex(headers);
+  const sourceRange = sourceColumnIndex === -1
+    ? ""
+    : `${columnName(sourceColumnIndex)}${startRow}:${columnName(sourceColumnIndex)}${endRow}`;
 
   let writeResult = await updateSheetValues({
     sheetUrl,
     range: `${sheetName}!${range}`,
-    values: buildKeywordTotalValues(rows)
+    values: buildKeywordTotalValues(newRows, { headers })
   });
+  let sourceWriteResult = { skipped: true, reason: "source_header_missing" };
+  if (writeResult.ok && sourceRange) {
+    sourceWriteResult = await updateSheetValues({
+      sheetUrl,
+      range: `${sheetName}!${sourceRange}`,
+      values: buildKeywordTotalSourceValues(newRows)
+    });
+  }
   if (!writeResult.ok && /exceeds grid limits/i.test(writeResult.reason || "")) {
-    const appendedRowCount = Math.max(rows.length + 100, 500);
+    const appendedRowCount = Math.max(newRows.length + 100, 500);
     const expandResult = await batchUpdateSheet({
       sheetUrl,
       requests: [
@@ -451,36 +556,49 @@ async function pasteRowsToKeywordTotalSheet(cdp, sheetPage, sheetUrl, sheetName,
     writeResult = await updateSheetValues({
       sheetUrl,
       range: `${sheetName}!${range}`,
-      values: buildKeywordTotalValues(rows)
+      values: buildKeywordTotalValues(newRows, { headers })
     });
+    if (writeResult.ok && sourceRange) {
+      sourceWriteResult = await updateSheetValues({
+        sheetUrl,
+        range: `${sheetName}!${sourceRange}`,
+        values: buildKeywordTotalSourceValues(newRows)
+      });
+    }
   }
   if (!writeResult.ok) {
     throw new Error(`写入 ${sheetName} 失败: ${writeResult.reason || "unknown error"}`);
+  }
+  if (sourceWriteResult.ok === false) {
+    throw new Error(`写入 ${sheetName} 来源列失败: ${sourceWriteResult.reason || "unknown error"}`);
   }
 
   const judgementFormatResult = await formatRejectedKeywordCells({
     sheetUrl,
     sheetId: gid,
     startRow,
-    rows
+    rows: newRows
   }).catch((error) => ({ ok: false, reason: error.message || String(error) }));
 
   const verify = await getSheetValues({
     sheetUrl,
-    range: `${sheetName}!A:F`
+    range: keywordTotalReadRange(sheetName)
   });
 
   return {
     gid,
     startRow,
     endRow,
-    pastedRows: rows.length,
+    pastedRows: newRows.length,
+    duplicateRows: duplicateFilter.skipped.length,
     rowCountBeforeRead: Math.max(0, existing.values.length - (hasHeader ? 1 : 0)),
     rowCountAfterRead: verify.ok ? Math.max(0, verify.values.length - 1) : null,
     method: "google_sheets_api",
     mode: "append",
     range,
+    sourceRange,
     writeResult,
+    sourceWriteResult,
     judgementFormatResult
   };
 }
@@ -669,7 +787,7 @@ async function runSemrushFlow(cdp, page, config, state, statePath, maxPages) {
           return { page, rows, filteredKeywordCount: rows.length };
         }
 
-        await clickViewAllKeywords(cdp, page.sessionId);
+        await navigateToKeywordMagic(cdp, page.sessionId, task);
         state.openedKeywordMagic = true;
         await saveState(statePath, state);
         continue;
@@ -698,7 +816,7 @@ async function runSemrushFlow(cdp, page, config, state, statePath, maxPages) {
           state.matchTypeApplied = false;
           state.volumeFilterApplied = false;
           state.kdFilterApplied = false;
-          state.magicSearchResult = await navigateToKeywordOverview(cdp, page.sessionId, task.query, task.matchCountry);
+          state.magicSearchResult = await navigateToKeywordMagic(cdp, page.sessionId, task);
           state.searchedQuery = task.query;
           await saveState(statePath, state);
           continue;
@@ -761,6 +879,7 @@ async function runOneTask({
   maxPages,
   outDir,
   keywordTotalGid,
+  source,
   reset,
   skipSheetWrite
 }) {
@@ -782,7 +901,7 @@ async function runOneTask({
   const outputCountry = task.mode === "keyword"
     ? ""
     : task.matchCountry;
-  const rawOutputRows = toOutputRows(result.rows, { country: outputCountry });
+  const rawOutputRows = toOutputRows(result.rows, { country: outputCountry, source });
   const keywordOverviewRows = rawOutputRows.map((row) => ({
           ...row,
           判断: "继续",
@@ -802,7 +921,7 @@ async function runOneTask({
           reason: "keyword_overview_flow"
         }
       }
-    : filterKeywordRowsForToolSites(rawOutputRows, task);
+    : filterKeywordRowsForEcommerce(rawOutputRows, task);
   const outputRows = keywordFilterResult.rows;
 
   await writeJson(jsonPath, {
@@ -893,18 +1012,21 @@ async function main() {
   const maxPages = maxPagesArg === "all" ? Number.POSITIVE_INFINITY : Number(maxPagesArg);
   const outDir = readArg("out-dir", "output/semrush-step1");
   const keywordTotalGid = readArg("keyword-total-gid", "999267438");
+  const source = readArg("source", "");
   const reset = readFlag("reset");
   const skipSheetWrite = readFlag("skip-sheet-write");
   const force = readFlag("force");
   const stopOnError = readFlag("stop-on-error");
   const restartWorkPageEvery = Number(readArg("restart-work-page-every", "0")) || 0;
 
-	  const cdp = await connectChromeCdpWithRecovery();
-
+  let managedChrome;
+  let cdp;
   let page;
   let handledSinceWorkPageRestart = 0;
   let config;
-	  try {
+  try {
+    managedChrome = await launchManagedChromeCdp();
+    cdp = await connectChromeCdpWithRecovery();
     console.log("Reading Google Sheet config...");
 	    config = await readToolConfig(cdp, {
       sheetUrl,
@@ -945,6 +1067,7 @@ async function main() {
           maxPages,
           outDir,
           keywordTotalGid,
+          source,
           reset,
           skipSheetWrite
         });
@@ -993,13 +1116,14 @@ async function main() {
     });
     console.log(`Run summary: ${summaries.length} row(s) handled.`);
   } finally {
-    if (page) {
+    if (page && cdp) {
       await detachChromePage(cdp, page.sessionId);
     }
-    if (config?.targetPage) {
+    if (config?.targetPage && cdp) {
       await detachChromePage(cdp, config.targetPage.sessionId);
     }
-    cdp.close();
+    await cleanupManagedChromeCdp(cdp, managedChrome);
+    cdp?.close();
   }
 }
 
