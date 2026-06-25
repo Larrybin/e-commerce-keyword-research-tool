@@ -121,15 +121,11 @@ npm run amazon:crawl -- --resume
 npm run amazon:crawl -- --dry-run --max-depth=2 --max-pages=50
 npm run amazon:seed-roots
 npm run amazon:seed-roots -- --write --limit=500
-npm run amazon:seed-keywords
-npm run amazon:seed-keywords -- --write --limit=500
 ```
 
 脚本会创建或复用 `Amazon目录词` 子表，写入 `国家 / 平台 / 关键词 / 一级目录 / 二级目录 / 三级目录 / 目录路径 / Amazon URL / 深度 / 抓取时间`。`amazon:crawl` 只抓 Amazon Best Sellers 目录树，不进入商品页；断点默认保存在 `state/amazon-catalog-crawl.json`；默认每 5 秒输出一次 `visited / queue / categories / errors / rate` 进度，`--dry-run` 不写 Sheet 也不更新断点。
 
 `amazon:seed-roots` 从 `Amazon目录词` 筛选 2 个单词及以上、深度 1-2、偏实体商品的目录词，去重后追加到 `词根拓展` 的 `词根` 列。默认只预览前 500 个候选；加 `--write` 才写入。可用参数：`--min-words=2 --min-depth=1 --max-depth=2 --limit=500`。
-
-`amazon:seed-keywords` 从 `Amazon目录词` 筛选 2 个单词及以上、深度 3-5、偏实体商品的目录词，去重后追加到 `关键词总表`，存在 `来源` 表头时标记为 `amazon_catalog`。默认只预览前 500 个候选；加 `--write` 才写入。可用参数：`--min-words=2 --min-depth=3 --max-depth=5 --limit=500 --country=美国`。
 
 ## 输出结构
 

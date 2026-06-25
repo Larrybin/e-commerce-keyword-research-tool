@@ -15,7 +15,6 @@
     "amazon:catalog": "node src/amazon-catalog-to-sheet.mjs",
     "amazon:crawl": "node src/crawl-amazon-catalog.mjs",
     "amazon:seed-roots": "node src/amazon-catalog-seed-roots.mjs",
-    "amazon:seed-keywords": "node src/amazon-catalog-seed-keywords.mjs",
     "chrome:allow": "osascript scripts/click-chrome-remote-debugging-allow.applescript",
     "task:status": "node src/task-status-sync.mjs",
     "workspace:domain-page": "node src/workspace-domain-page.mjs",
