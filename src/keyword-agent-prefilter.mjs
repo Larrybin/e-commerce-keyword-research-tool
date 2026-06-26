@@ -2,7 +2,7 @@
 import { fileURLToPath } from "node:url";
 import { readArg, readFlag } from "./lib/args.mjs";
 import { writeJson } from "./lib/files.mjs";
-import { getSheetValues, updateSheetValues } from "./lib/google-sheets-api.mjs";
+import { batchUpdateSheetValues, getSheetValues } from "./lib/google-sheets-api.mjs";
 import { evaluateKeywordAgentPrefilter } from "./lib/keyword-agent-prefilter.mjs";
 import { KEYWORD_TOTAL_SHEET, keywordTotalReadRange } from "./lib/sheet-write.mjs";
 import { columnName, valuesToTable } from "./lib/table-utils.mjs";
@@ -17,37 +17,24 @@ function headerIndex(headers, header) {
   return index;
 }
 
-function optionalHeaderIndex(headers, header) {
-  return headers.findIndex((candidate) => String(candidate || "").trim() === header);
-}
-
-function buildPrefilterUpdate(headers, row, evaluation, { force = false } = {}) {
-  const values = [...row.values];
-  while (values.length < headers.length) values.push("");
-
+export function buildPrefilterCellUpdate(headers, row, evaluation, { force = false } = {}) {
   const prefilterIndex = headerIndex(headers, PREFILTER_COLUMN);
-  const currentPrefilter = String(values[prefilterIndex] || "").trim();
+  const currentPrefilter = String(row.values[prefilterIndex] || "").trim();
   if (!force && currentPrefilter) {
-    return { skipped: true, reason: "prefilter_already_filled", values };
+    return { skipped: true, reason: "prefilter_already_filled" };
   }
 
-  values[prefilterIndex] = evaluation.judgement;
-  return { skipped: false, values };
+  return {
+    skipped: false,
+    range: `${KEYWORD_TOTAL_SHEET}!${columnName(prefilterIndex)}${row.rowNumber}`,
+    values: [[evaluation.judgement]]
+  };
 }
 
 async function readKeywordTable(sheetUrl) {
   const result = await getSheetValues({ sheetUrl, range: keywordTotalReadRange() });
   if (!result.ok) throw new Error(`读取 ${KEYWORD_TOTAL_SHEET} 失败: ${result.reason || "unknown error"}`);
   return valuesToTable(result.values || []);
-}
-
-async function writeKeywordRow({ sheetUrl, headers, rowNumber, values }) {
-  const lastColumn = columnName(headers.length - 1);
-  return updateSheetValues({
-    sheetUrl,
-    range: `${KEYWORD_TOTAL_SHEET}!A${rowNumber}:${lastColumn}${rowNumber}`,
-    values: [values.slice(0, headers.length)]
-  });
 }
 
 export function collectPrefilterRows(keywordTable, { fromRow = 0, toRow = 0, limit = DEFAULT_LIMIT, force = false } = {}) {
@@ -85,25 +72,17 @@ async function main() {
   const keywordTable = await readKeywordTable(sheetUrl);
   const collected = collectPrefilterRows(keywordTable, { fromRow, toRow, limit, force });
   const summaries = [...collected.skipped];
+  const updates = [];
 
   for (const row of collected.rows) {
     const evaluation = evaluateKeywordAgentPrefilter(row);
-    const update = buildPrefilterUpdate(keywordTable.headers, row, evaluation, { force });
+    const update = buildPrefilterCellUpdate(keywordTable.headers, row, evaluation, { force });
     if (update.skipped) {
       summaries.push({ row: row.rowNumber, keyword: row.record["关键词"], status: "skipped", reason: update.reason });
       continue;
     }
 
-    let writeResult = { skipped: true, dryRun };
-    if (!dryRun) {
-      writeResult = await writeKeywordRow({
-        sheetUrl,
-        headers: keywordTable.headers,
-        rowNumber: row.rowNumber,
-        values: update.values
-      });
-      if (!writeResult.ok) throw new Error(`写入第 ${row.rowNumber} 行失败: ${writeResult.reason || "unknown error"}`);
-    }
+    updates.push({ range: update.range, values: update.values });
 
     summaries.push({
       row: row.rowNumber,
@@ -112,16 +91,26 @@ async function main() {
       values: {
         [PREFILTER_COLUMN]: evaluation.judgement
       },
-      reason: evaluation.reason,
-      writeResult
+      reason: evaluation.reason
     });
   }
 
+  let writeResult = { skipped: true, dryRun };
+  if (!dryRun && updates.length > 0) {
+    writeResult = await batchUpdateSheetValues({
+      sheetUrl,
+      data: updates,
+      valueInputOption: "RAW"
+    });
+    if (!writeResult.ok) throw new Error(`批量写入 ${KEYWORD_TOTAL_SHEET} ${PREFILTER_COLUMN} 失败: ${writeResult.reason || "unknown error"}`);
+  }
+
   const summary = {
-    source: { sheetUrl, keywordSheet: KEYWORD_TOTAL_SHEET, dryRun, force, limit, fromRow, toRow, ranAt: new Date().toISOString() },
+    source: { sheetUrl, keywordSheet: KEYWORD_TOTAL_SHEET, dryRun, force, limit, fromRow, toRow, writeMode: "batch_agent_prefilter_column", ranAt: new Date().toISOString() },
     selectedRows: collected.rows.length,
     updatedRows: summaries.filter((item) => item.status === "updated" || item.status === "dry-run").length,
     skippedRows: summaries.filter((item) => item.status === "skipped").length,
+    writeResult,
     rows: summaries
   };
   await writeJson(out, summary);

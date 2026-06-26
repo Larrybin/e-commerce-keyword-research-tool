@@ -14,10 +14,10 @@ test("pickKeywordTask applies Semrush defaults for blank filter cells", () => {
       keyword: "",
       matchType: "词组匹配",
       matchCountry: "",
-      volumeMin: "1000",
+      volumeMin: "3000",
       volumeMax: "",
       kdMin: "0",
-      kdMax: "60",
+      kdMax: "50",
       machineFilter: ""
     }
   );

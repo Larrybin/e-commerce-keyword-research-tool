@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import test from "node:test";
-import { createSheetWriteQueue } from "../src/bing-precheck.mjs";
+import {
+  collectBingMetricApiKeysFromApiTable,
+  createSheetWriteQueue
+} from "../src/bing-precheck.mjs";
 import {
   classifyTopSearchResults,
   evaluateBingPrecheck,
@@ -63,6 +66,18 @@ test("evaluateBingPrecheck rejects only when impressions miss the minimum", () =
       minImpressions: ""
     }).judgement,
     "继续"
+  );
+  assert.deepEqual(
+    evaluateBingPrecheck({
+      impressions: "",
+      minImpressions: ""
+    }),
+    {
+      judgement: "拒绝",
+      impressionFailed: true,
+      impressionsNumber: 0,
+      minImpressionsNumber: 500
+    }
   );
 });
 
@@ -170,6 +185,26 @@ test("createSheetWriteQueue batches row writes before flushing", () => {
   assert.equal(queue.shouldFlush(), true);
 });
 
+test("collectBingMetricApiKeysFromApiTable reads keys from the api tab", () => {
+  const apiTable = {
+    headers: ["IP所在区域", "指纹的名称", "域名", "bing webmaster api"],
+    rows: [
+      { rowNumber: 2, values: ["", "1", "a.com", "11111111111111111111111111111111"] },
+      { rowNumber: 3, values: ["", "2", "b.com", "not-a-key"] },
+      { rowNumber: 4, values: ["", "3", "c.com", "22222222222222222222222222222222"] }
+    ]
+  };
+
+  assert.deepEqual(
+    collectBingMetricApiKeysFromApiTable(apiTable, { startFingerprintName: "2" }),
+    ["22222222222222222222222222222222"]
+  );
+  assert.deepEqual(
+    collectBingMetricApiKeysFromApiTable(apiTable, { startFingerprintName: "", startRow: 4 }),
+    ["22222222222222222222222222222222"]
+  );
+});
+
 test("Bing writers no longer reference legacy top5 SERP columns", async () => {
   const files = [
     new URL("../src/bing-precheck.mjs", import.meta.url),
@@ -179,4 +214,12 @@ test("Bing writers no longer reference legacy top5 SERP columns", async () => {
     const source = await fs.readFile(file, "utf8");
     assert.doesNotMatch(source, /top5根域名数量|根域名1|根域名1排名|根域名2|根域名2排名/);
   }
+});
+
+test("bing:precheck uses only API-sheet Webmaster metrics", async () => {
+  const source = await fs.readFile(new URL("../src/bing-precheck.mjs", import.meta.url), "utf8");
+
+  assert.doesNotMatch(source, /readFeishuBingRegistry|readBingWebmasterApiKeys|fetchBingKeywordResearchViaPageApis/);
+  assert.doesNotMatch(source, /fetchBingTopSearchUrlsViaBrowser|searchBingKeyword|connectChromeCdpWithRecovery|chrome-only|api\+chrome/);
+  assert.doesNotMatch(source, /fallback to local file|fallback to browser metrics|browser page/);
 });

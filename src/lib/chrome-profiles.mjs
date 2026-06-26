@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { waitForChromeTarget, waitForChromeTargetWithCdp } from "./cdp.mjs";
+import { attachChromePage, detachChromePage, evaluate, waitForChromeTarget, waitForChromeTargetWithCdp } from "./cdp.mjs";
 
 const CHROME_ROOT = path.join(os.homedir(), "Library/Application Support/Google/Chrome");
 const CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -104,9 +104,23 @@ export async function ensureChromeProfileTarget(profile, url, timeoutMs = 20000)
 
 export async function ensureChromeProfileTargetWithCdp(cdp, profile, url, timeoutMs = 20000) {
   const { targetId } = await cdp.send("Target.createTarget", { url });
-  return waitForChromeTargetWithCdp(
+  const target = await waitForChromeTargetWithCdp(
     cdp,
-    (target) => target.targetId === targetId || (target.type === "page" && target.url.startsWith(url)),
+    (target) => target.type === "page" && target.targetId === targetId && target.url.startsWith(url),
     timeoutMs
   );
+  const page = await attachChromePage(cdp, target.targetId);
+  try {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const location = await evaluate(cdp, page.sessionId, "location.href", 3000).catch(() => "");
+      if (location && location !== "about:blank") {
+        return target;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new Error(`Timed out waiting for Chrome target to leave about:blank: ${url}`);
+  } finally {
+    await detachChromePage(cdp, page.sessionId);
+  }
 }

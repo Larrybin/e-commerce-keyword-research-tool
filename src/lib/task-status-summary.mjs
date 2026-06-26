@@ -63,14 +63,16 @@ export function keywordRowsForTask(taskRow, keywordRows) {
 
 export function summarizeTaskStatus(taskRow, keywordRows) {
   const rows = keywordRowsForTask(taskRow, keywordRows);
-  const machineContinueRows = rows.filter((row) => trim(row.record["判断"]) === "继续");
-  const initialBingContinueRows = rows.filter((row) => trim(row.record["bing初步判断"]) === "继续");
-  const serpOpportunityRows = rows.filter((row) => ["继续", "机会"].includes(trim(row.record["SERP机会判断"])));
-  const ratingARows = rows.filter((row) => trim(row.record["评级"]) === "A");
+  const keywordRowsWithKeyword = rows.filter((row) => hasValue(row, "关键词"));
+  const prefilterDone = keywordRowsWithKeyword.length === 0 || keywordRowsWithKeyword.every((row) => hasValue(row, "agent预判断"));
+  const agentPrefilterContinueRows = keywordRowsWithKeyword.filter((row) => trim(row.record["agent预判断"]) === "继续");
+  const initialBingContinueRows = agentPrefilterContinueRows.filter((row) => trim(row.record["bing初步判断"]) === "继续");
+  const serpOpportunityRows = agentPrefilterContinueRows.filter((row) => ["继续", "机会"].includes(trim(row.record["SERP机会判断"])));
+  const ratingARows = agentPrefilterContinueRows.filter((row) => trim(row.record["评级"]) === "A");
   const agentStarted = serpOpportunityRows.length > 0;
-  const zeroCandidateFlowCompleted = semCollectionCompleted(taskRow) && machineContinueRows.length === 0;
+  const zeroCandidateFlowCompleted = semCollectionCompleted(taskRow) && prefilterDone && agentPrefilterContinueRows.length === 0;
 
-  const threeMDone = countWhere(machineContinueRows, (row) => hasValue(row, "3M展示"));
+  const threeMDone = countWhere(agentPrefilterContinueRows, (row) => hasValue(row, "3M展示"));
   const secondDone = countWhere(initialBingContinueRows, (row) => hasValue(row, "SERP机会判断"));
   const countryDone = countWhere(ratingARows, (row) => hasValue(row, "top 1国家"));
   const agentDone = countWhere(serpOpportunityRows, (row) =>
@@ -82,8 +84,8 @@ export function summarizeTaskStatus(taskRow, keywordRows) {
     : agentStarted ? progress(agentDone, serpOpportunityRows.length) : existingStatus(taskRow, "Agent 判断流程");
 
   return {
-    "3M采集状态": machineContinueRows.length > 0 || zeroCandidateFlowCompleted
-      ? progress(threeMDone, machineContinueRows.length)
+    "3M采集状态": agentPrefilterContinueRows.length > 0 || zeroCandidateFlowCompleted
+      ? progress(threeMDone, agentPrefilterContinueRows.length)
       : existingStatus(taskRow, "3M采集状态"),
     "二次判断状态": initialBingContinueRows.length > 0 || zeroCandidateFlowCompleted
       ? progress(secondDone, initialBingContinueRows.length)

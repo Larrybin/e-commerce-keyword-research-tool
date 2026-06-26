@@ -16,6 +16,19 @@ const MACOS_CHROME_REMOTE_DEBUGGING_ALLOW_CLICKER = fileURLToPath(
   new URL("../../scripts/click-chrome-remote-debugging-allow.applescript", import.meta.url)
 );
 
+export function chromeWebSocketEndpointFromDevToolsActivePort(port, browserPath) {
+  if (!port || !browserPath) {
+    return "";
+  }
+  if (/^wss?:\/\//.test(browserPath)) {
+    return browserPath;
+  }
+  if (!browserPath.startsWith("/")) {
+    return "";
+  }
+  return `ws://127.0.0.1:${port}${browserPath}`;
+}
+
 export function readDebuggerEndpointFromPort(port) {
   try {
     const output = execFileSync("curl", [

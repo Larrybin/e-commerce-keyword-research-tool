@@ -3,8 +3,8 @@ import { columnName } from "./table-utils.mjs";
 export const KEYWORD_TOTAL_SHEET = "关键词总表";
 export const KEYWORD_TOTAL_READ_COLUMNS = "A:BA";
 export const KEYWORD_TOTAL_BASE_WRITE_COLUMNS = "A:F";
-export const KEYWORD_TOTAL_HEADERS = ["词根", "关键词", "国家", "搜索量", "KD", "判断"];
-export const KEYWORD_TOTAL_SOURCE_HEADER = "来源";
+export const KEYWORD_TOTAL_HEADERS = ["词根", "关键词", "国家", "来源", "搜索量", "KD"];
+export const GOOGLE_SHEETS_CELL_LIMIT = 10_000_000;
 
 function normalizeCell(value) {
   return String(value ?? "").trim();
@@ -31,6 +31,47 @@ export function keywordTotalBaseWriteRange(startRow, endRow, sheetName = KEYWORD
   return `${sheetName}!A${startRow}:${columnName(keywordTotalBaseEndColumnIndex(headers))}${endRow}`;
 }
 
+export function spreadsheetCellCount(sheets = []) {
+  return sheets.reduce((total, sheet) => {
+    const grid = sheet?.properties?.gridProperties || {};
+    return total + (Number(grid.rowCount) || 0) * (Number(grid.columnCount) || 0);
+  }, 0);
+}
+
+export function planKeywordTotalWriteCapacity({
+  sheets = [],
+  sheetName = KEYWORD_TOTAL_SHEET,
+  gid = "",
+  startRow,
+  rowCount
+}) {
+  const target = sheets.find((sheet) => {
+    const props = sheet?.properties || {};
+    return String(props.sheetId) === String(gid) || props.title === sheetName;
+  });
+  if (!target) {
+    throw new Error(`找不到 ${sheetName} 工作表 metadata`);
+  }
+
+  const grid = target.properties?.gridProperties || {};
+  const currentRowCount = Number(grid.rowCount) || 0;
+  const currentColumnCount = Number(grid.columnCount) || 0;
+  const endRow = startRow + rowCount - 1;
+  const rowsToAppend = Math.max(0, endRow - currentRowCount);
+  const currentCells = spreadsheetCellCount(sheets);
+  const cellsAfterAppend = currentCells + rowsToAppend * currentColumnCount;
+
+  return {
+    ok: cellsAfterAppend <= GOOGLE_SHEETS_CELL_LIMIT,
+    currentCells,
+    cellsAfterAppend,
+    currentRowCount,
+    currentColumnCount,
+    rowsToAppend,
+    limit: GOOGLE_SHEETS_CELL_LIMIT
+  };
+}
+
 export function findKeywordTotalAppendStartRow(sheet) {
   const headers = sheet?.headers || [];
   const indexes = keywordTotalColumnIndexes(headers);
@@ -53,7 +94,7 @@ export function findKeywordTotalAppendStartRow(sheet) {
 }
 
 export function buildKeywordTotalTsv(rows, { includeHeader = false } = {}) {
-  const lines = rows.map((row) => [row.词根, row.关键词, row.国家, row.搜索量, row.KD, row.判断].join("\t"));
+  const lines = rows.map((row) => KEYWORD_TOTAL_HEADERS.map((header) => row[header] || "").join("\t"));
   if (includeHeader) {
     lines.unshift(KEYWORD_TOTAL_HEADERS.join("\t"));
   }
@@ -77,14 +118,6 @@ export function buildKeywordTotalValues(rows, { includeHeader = false, headers =
 
 export function isKeywordTotalHeaderRow(row) {
   return KEYWORD_TOTAL_HEADERS.every((header) => row?.includes(header));
-}
-
-export function keywordTotalSourceColumnIndex(headers = []) {
-  return headers.indexOf(KEYWORD_TOTAL_SOURCE_HEADER);
-}
-
-export function buildKeywordTotalSourceValues(rows) {
-  return rows.map((row) => [row.来源 || ""]);
 }
 
 function keywordKey(value) {

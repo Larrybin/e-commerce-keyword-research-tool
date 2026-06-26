@@ -41,7 +41,8 @@ test("task status summary records in-progress collection and agent counts", () =
   const keywordRows = [
     row(10, {
       "词根": "calculator",
-      "判断": "继续",
+      "关键词": "age calculator",
+      "agent预判断": "继续",
       "3M展示": "120",
       "bing初步判断": "继续",
       "SERP机会判断": "机会",
@@ -51,7 +52,8 @@ test("task status summary records in-progress collection and agent counts", () =
     }),
     row(11, {
       "词根": "calculator",
-      "判断": "继续",
+      "关键词": "loan calculator",
+      "agent预判断": "继续",
       "3M展示": "",
       "bing初步判断": "继续",
       "SERP机会判断": "",
@@ -61,7 +63,8 @@ test("task status summary records in-progress collection and agent counts", () =
     }),
     row(12, {
       "词根": "calculator",
-      "判断": "拒绝",
+      "关键词": "calculator app",
+      "agent预判断": "拒绝",
       "3M展示": "",
       "bing初步判断": "",
       "SERP机会判断": "",
@@ -84,7 +87,8 @@ test("task status summary keeps agent progress while pending rows remain", () =>
   const keywordRows = [
     row(10, {
       "词根": "generator",
-      "判断": "继续",
+      "关键词": "portable generator",
+      "agent预判断": "继续",
       "3M展示": "90",
       "bing初步判断": "继续",
       "SERP机会判断": "继续",
@@ -93,7 +97,8 @@ test("task status summary keeps agent progress while pending rows remain", () =>
     }),
     row(11, {
       "词根": "generator",
-      "判断": "继续",
+      "关键词": "solar generator",
+      "agent预判断": "继续",
       "3M展示": "80",
       "bing初步判断": "继续",
       "SERP机会判断": "继续",
@@ -113,7 +118,8 @@ test("task status summary leaves unstarted stages blank", () => {
   const keywordRows = [
     row(10, {
       "词根": "unstarted",
-      "判断": "",
+      "关键词": "unstarted keyword",
+      "agent预判断": "",
       "3M展示": "",
       "bing初步判断": "",
       "SERP机会判断": "",
@@ -143,7 +149,8 @@ test("task status summary preserves existing zero progress for stages already re
   const keywordRows = [
     row(10, {
       "词根": "started",
-      "判断": "",
+      "关键词": "started keyword",
+      "agent预判断": "",
       "3M展示": "",
       "bing初步判断": "",
       "SERP机会判断": "",
@@ -181,6 +188,8 @@ test("task status summary reports completed agent rating distribution", () => {
   const keywordRows = [
     row(10, {
       "词根": "generator",
+      "关键词": "portable generator",
+      "agent预判断": "继续",
       "SERP机会判断": "继续",
       "评级": "A",
       "第一次判断": "继续",
@@ -188,6 +197,8 @@ test("task status summary reports completed agent rating distribution", () => {
     }),
     row(11, {
       "词根": "generator",
+      "关键词": "solar generator",
+      "agent预判断": "继续",
       "SERP机会判断": "继续",
       "评级": "B",
       "第一次判断": "继续",
@@ -195,6 +206,8 @@ test("task status summary reports completed agent rating distribution", () => {
     }),
     row(12, {
       "词根": "generator",
+      "关键词": "inverter generator",
+      "agent预判断": "继续",
       "SERP机会判断": "继续",
       "评级": "C",
       "第一次判断": "继续",
@@ -202,6 +215,8 @@ test("task status summary reports completed agent rating distribution", () => {
     }),
     row(13, {
       "词根": "generator",
+      "关键词": "gas generator",
+      "agent预判断": "继续",
       "SERP机会判断": "继续",
       "评级": "",
       "第一次判断": "排除",
@@ -226,7 +241,8 @@ test("task status update builder skips empty task rows", () => {
     rows: [
       row(10, {
         "词根": "generator",
-        "判断": "继续",
+        "关键词": "portable generator",
+        "agent预判断": "继续",
         "3M展示": "10",
         "bing初步判断": "",
         "SERP机会判断": "",

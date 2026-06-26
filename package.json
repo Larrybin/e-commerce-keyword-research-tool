@@ -6,6 +6,7 @@
   "scripts": {
     "read:sheet": "node src/read-google-sheet.mjs",
     "semrush:step1": "node src/semrush-step1.mjs",
+    "semrush:ensure": "node src/semrush-ensure.mjs",
     "agent:prefilter": "node src/keyword-agent-prefilter.mjs",
     "agent:keyword": "node src/keyword-agent.mjs",
     "bing:precheck": "node src/bing-precheck.mjs",
@@ -13,7 +14,8 @@
     "bing:download-related": "node src/bing-download-related.mjs",
     "bing:hubstudio-serp": "node src/bing-hubstudio-serp.mjs",
     "amazon:catalog": "node src/amazon-catalog-to-sheet.mjs",
-    "amazon:crawl": "node src/crawl-amazon-catalog.mjs",
+    "catalog:crawl": "node src/crawl-catalog.mjs",
+    "amazon:crawl": "node src/crawl-catalog.mjs --platform=amazon --state=state/amazon-catalog-crawl.json",
     "amazon:seed-roots": "node src/amazon-catalog-seed-roots.mjs",
     "chrome:allow": "osascript scripts/click-chrome-remote-debugging-allow.applescript",
     "task:status": "node src/task-status-sync.mjs",

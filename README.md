@@ -1,6 +1,6 @@
 # Keyword Research Tool
 
-这个仓库用于搭建关键词调研工具。Google Sheet 数据读取/写入默认使用 Google Sheets API service account；Chrome/CDP 只用于 Semrush、Bing、Google SERP 等必须复用网页会话的自动化。
+这个仓库用于搭建关键词调研工具。Google Sheet 数据读取/写入默认使用 Google Sheets API service account；Chrome/CDP 用于 Semrush、Bing、Google SERP，以及需要浏览器渲染目录页的电商平台。
 
 ## 当前能力
 
@@ -12,7 +12,7 @@
   - 识别当前页面是在 3ue 登录页、3ue 首页、Semrush 首页、关键词概览页，还是关键词魔法工具页
   - 按 `词根拓展` 的 `词根`、`匹配类型`、`搜索量范围`、`KD范围` 设置页面
   - 采集 Keyword Magic 表格分页里的 `关键词`、`搜索量`、`KD`
-  - 输出本地 CSV/JSON，并写入 `关键词总表`，存在 `来源` 表头时标记为 `semrush`
+  - 输出本地 CSV/JSON，并写入 `关键词总表` 的 `词根 / 关键词 / 国家 / 来源 / 搜索量 / KD`
 - 输出结构化 JSON：`output/google-sheet-input.json`
 - 不需要 OAuth 应用；需要 service account JSON，并把目标 Sheet 分享给 service account 邮箱
 - 通过 Chrome DevTools WebSocket 复用本机 Chrome 登录态执行网页自动化
@@ -64,10 +64,24 @@ npm run read:sheet -- --out=output/my-sheet.json
 执行 Semrush 第一步：
 
 ```bash
+npm run semrush:ensure
 npm run semrush:step1 -- --reset --max-pages=all
 ```
 
-`semrush:step1` 默认会启动独立 Chrome CDP 到 `127.0.0.1:9333`，使用临时 profile，任务结束后关闭并删除临时数据。采集输出文件和 Sheet 写入结果会保留。
+Semrush 使用共享 Chrome profile：默认端口 `127.0.0.1:9333`，默认 profile 目录
+`~/Library/Application Support/Codex/SemrushChrome`。`semrush:step1` 会连接这个共享 profile，
+只创建/关闭本次任务自己的 tab，不会接管或关闭其它 Semrush tab。`semrush:ensure` 用于启动共享
+profile，并在需要时完成 3ue 登录 / dash 打开 Semrush / keyword overview 可用性验证。
+
+可用环境变量覆盖共享浏览器：
+
+```bash
+SEMRUSH_CHROME_PORT=9333
+SEMRUSH_CHROME_USER_DATA_DIR="$HOME/Library/Application Support/Codex/SemrushChrome"
+SEMRUSH_LOCK_PATH=/tmp/semrush-shared-chrome.lock
+```
+
+采集输出文件和 Sheet 写入结果会保留。
 
 常用参数：
 
@@ -96,7 +110,7 @@ npm run agent:keyword -- --llm-provider=openai
 npm run agent:keyword -- --mode=rules
 ```
 
-`agent:prefilter` 是轻量电商预筛：明显非电商和 B 端词写 `判断=拒绝`，其余继续；结果原因写入 `机器筛选原因`。
+`agent预判断` 是 Semrush 之后的轻量电商预筛：只处理存在 `关键词` 的候选词，由 Codex 使用 `ecommerce-keyword-prefilter` skill 逐词判断，实写时只批量更新 `agent预判断` 单列。`agent:prefilter` 只是小范围 dry-run/批量写入辅助，不作为全量判断的默认替代。
 
 默认 LLM provider 是 `deepseek`，默认模型是 `deepseek-v4-flash`，需要 `DEEPSEEK_API_KEY`。切回 OpenAI 时用 `--llm-provider=openai` 或 `KEYWORD_AGENT_LLM_PROVIDER=openai`，并设置 `OPENAI_API_KEY`。
 
@@ -116,6 +130,8 @@ npm run google:precheck -- --from-row=2 --to-row=10 --force
 ```bash
 npm run amazon:catalog -- --file=data/amazon-categories.txt
 npm run amazon:catalog -- --init
+npm run catalog:crawl -- --max-depth=10 --max-pages=0 --batch-size=200 --delay-ms=1500 --sheet-write-delay-ms=1000
+npm run catalog:crawl -- --platform=walmart,ebay,etsy --resume
 npm run amazon:crawl -- --max-depth=10 --max-pages=0 --batch-size=200 --delay-ms=1500 --log-every-ms=5000
 npm run amazon:crawl -- --resume
 npm run amazon:crawl -- --dry-run --max-depth=2 --max-pages=50
@@ -123,7 +139,7 @@ npm run amazon:seed-roots
 npm run amazon:seed-roots -- --write --limit=500
 ```
 
-脚本会创建或复用 `Amazon目录词` 子表，写入 `国家 / 平台 / 关键词 / 一级目录 / 二级目录 / 三级目录 / 目录路径 / Amazon URL / 深度 / 抓取时间`。`amazon:crawl` 只抓 Amazon Best Sellers 目录树，不进入商品页；断点默认保存在 `state/amazon-catalog-crawl.json`；默认每 5 秒输出一次 `visited / queue / categories / errors / rate` 进度，`--dry-run` 不写 Sheet 也不更新断点。
+脚本会创建或复用 `Amazon目录词` 子表，写入 `国家 / 平台 / 关键词 / 一级目录 / 二级目录 / 三级目录 / 目录路径 / Amazon URL / 深度 / 抓取时间`；为保持现有 Sheet 列不变，多平台 URL 仍写入 `Amazon URL` 列。`catalog:crawl` 平台级并发抓取 Amazon、Walmart、eBay、Etsy、Target、Best Buy、Home Depot、Lowe's、Wayfair、Chewy、Macy's、Nordstrom、Kohl's、Costco、Sam's Club 类目，不进入商品页；Etsy、Home Depot、Wayfair、Chewy、Kohl's、Costco、Sam's Club 通过直连 Chrome CDP 读取渲染后的目录链接，并拦截图片、媒体、字体和 CSS 以减少流量。Lowe's 和 Macy's 当前使用站点级静态目录种子，因为线上页面会返回访问拦截/验证页。同平台按 URL/路径去重，跨平台同名类目保留多行；写 Sheet 使用单队列批量串行写入，`--sheet-write-delay-ms` 控制两次写入间隔。断点默认保存在 `state/catalog-crawl/<platform>.json`；`amazon:crawl` 复用同一入口且断点仍为 `state/amazon-catalog-crawl.json`；默认每 5 秒输出一次 `visited / queue / categories / errors / rate` 进度，`--dry-run` 不写 Sheet 也不更新断点。
 
 `amazon:seed-roots` 从 `Amazon目录词` 筛选 2 个单词及以上、深度 1-2、偏实体商品的目录词，去重后追加到 `词根拓展` 的 `词根` 列。默认只预览前 500 个候选；加 `--write` 才写入。可用参数：`--min-words=2 --min-depth=1 --max-depth=2 --limit=500`。
 
@@ -153,9 +169,9 @@ npm run amazon:seed-roots -- --write --limit=500
           "词根": "generator",
           "关键词": "",
           "匹配类型": "词组匹配",
-          "搜索量范围（小）": "1000",
+          "搜索量范围（小）": "3000",
           "KD范围（小）": "0",
-          "KD范围（大）": "60"
+          "KD范围（大）": "50"
         }
       ]
     }

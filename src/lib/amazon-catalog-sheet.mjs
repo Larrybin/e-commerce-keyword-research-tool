@@ -38,6 +38,10 @@ function keywordKey(value) {
   return normalizeKeyword(value).toLowerCase();
 }
 
+function platformKey(category = {}) {
+  return normalizeKeyword(category.platform || category["平台"] || "Amazon").toLowerCase();
+}
+
 function wordCount(value) {
   return normalizeKeyword(value)
     .replace(/&/g, " and ")
@@ -51,8 +55,13 @@ function quoteSheetName(sheetName) {
   return `'${String(sheetName).replaceAll("'", "''")}'`;
 }
 
-export function normalizeAmazonCatalogKeywords(values = [], existingRows = []) {
-  const seen = new Set(existingRows.map((row) => keywordKey(row?.record?.["关键词"] || row?.[2] || row?.[0])));
+export function normalizeAmazonCatalogKeywords(values = [], existingRows = [], platform = "Amazon") {
+  const targetPlatform = platformKey({ platform });
+  const seen = new Set(
+    existingRows
+      .filter((row) => platformKey(row?.record || { platform: row?.[1] }) === targetPlatform)
+      .map((row) => keywordKey(row?.record?.["关键词"] || row?.[2] || row?.[0]))
+  );
   const keywords = [];
 
   for (const value of values) {
@@ -69,15 +78,16 @@ export function normalizeAmazonCatalogKeywords(values = [], existingRows = []) {
 }
 
 export function categoryKey(category = {}) {
+  const platform = platformKey(category);
   const url = normalizeKeyword(category.url || category["Amazon URL"]);
-  if (url) return `url:${url.toLowerCase()}`;
+  if (url) return `platform:${platform}|url:${url.toLowerCase()}`;
   const path = normalizeKeyword(Array.isArray(category.path) ? category.path.join(" > ") : category["目录路径"]);
-  if (path) return `path:${path.toLowerCase()}`;
-  return `keyword:${keywordKey(category.keyword || category["关键词"])}`;
+  if (path) return `platform:${platform}|path:${path.toLowerCase()}`;
+  return `platform:${platform}|keyword:${keywordKey(category.keyword || category["关键词"])}`;
 }
 
 export function keywordOnlyKey(category = {}) {
-  return `keyword:${keywordKey(category.keyword || category["关键词"])}`;
+  return `platform:${platformKey(category)}|keyword:${keywordKey(category.keyword || category["关键词"])}`;
 }
 
 export function buildAmazonCatalogRecord(category = {}, crawledAt = new Date().toISOString()) {
@@ -116,11 +126,11 @@ export function buildExistingAmazonCatalogIndex(rows = []) {
   for (const row of rows) {
     const record = row.record || {};
     const key = categoryKey(record);
-    if (key !== "keyword:") {
+    if (!key.endsWith("|keyword:")) {
       byKey.set(key, row);
     }
     const keywordKeyValue = keywordOnlyKey(record);
-    if (keywordKeyValue !== "keyword:" && !record["Amazon URL"] && !record["目录路径"]) {
+    if (!keywordKeyValue.endsWith("|keyword:") && !record["Amazon URL"] && !record["目录路径"]) {
       byKeywordOnly.set(keywordKeyValue, row);
     }
   }

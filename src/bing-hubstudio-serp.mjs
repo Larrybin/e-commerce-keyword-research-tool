@@ -141,19 +141,21 @@ async function readHubstudioFingerprintsWithFallback({ startFingerprintName = ""
 }
 
 function selectRows(keywordTable, { fromRow, toRow, force }) {
+  const keywordIndex = headerIndex(keywordTable.headers, "关键词", KEYWORD_TOTAL_SHEET);
   const prefilterIndex = headerIndex(keywordTable.headers, "agent预判断", KEYWORD_TOTAL_SHEET);
-  const judgementIndex = headerIndex(keywordTable.headers, "判断", KEYWORD_TOTAL_SHEET);
   const bingFirstIndex = headerIndex(keywordTable.headers, "bing初步判断", KEYWORD_TOTAL_SHEET);
   const serpOpportunityIndex = optionalHeaderIndex(keywordTable.headers, "SERP机会判断");
   const selected = [];
   for (const row of keywordTable.rows) {
     if (fromRow && row.rowNumber < fromRow) continue;
     if (toRow && row.rowNumber > toRow) break;
+    const keyword = String(row.values[keywordIndex] || "").trim();
+    if (!keyword && !toRow) break;
+    if (!keyword) continue;
     const prefilter = String(row.values[prefilterIndex] || "").trim();
-    const judgement = String(row.values[judgementIndex] || "").trim();
     const bingFirst = String(row.values[bingFirstIndex] || "").trim();
     const serpOpportunity = serpOpportunityIndex === -1 ? "" : String(row.values[serpOpportunityIndex] || "").trim();
-    if (prefilter !== "继续" || judgement !== "继续" || bingFirst !== "继续") continue;
+    if (prefilter !== "继续" || bingFirst !== "继续") continue;
     if (serpOpportunity && !force) continue;
     selected.push(row);
   }

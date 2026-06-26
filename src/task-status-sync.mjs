@@ -21,7 +21,7 @@ const KEYWORD_READ_RANGE = keywordTotalReadRange();
 const REQUIRED_KEYWORD_HEADERS = [
   "词根",
   "关键词",
-  "判断",
+  "agent预判断",
   "3M展示",
   "bing初步判断",
   "SERP机会判断",

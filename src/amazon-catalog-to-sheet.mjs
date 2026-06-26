@@ -9,7 +9,7 @@ import {
   updateSheetValues
 } from "./lib/google-sheets-api.mjs";
 import { DEFAULT_SHEET_URL } from "./lib/tool-config.mjs";
-import { isValidAmazonCatalogCategory } from "./lib/amazon-catalog-crawler.mjs";
+import { isValidCatalogCategory } from "./lib/catalog-crawler.mjs";
 import {
   AMAZON_CATALOG_HEADERS,
   AMAZON_CATALOG_SHEET,
@@ -125,7 +125,7 @@ export async function writeAmazonCatalogKeywords({ sheetUrl, keywords }) {
 export async function writeAmazonCatalogCategories({ sheetUrl, categories, crawledAt = new Date().toISOString() }) {
   const existingValues = await writeHeaderIfNeeded(sheetUrl, await ensureAmazonCatalogSheet(sheetUrl));
   const table = valuesToTable(existingValues);
-  const validCategories = categories.filter((category) => isValidAmazonCatalogCategory(category));
+  const validCategories = categories.filter((category) => isValidCatalogCategory(category));
   const plan = planAmazonCatalogWrites(validCategories, table.rows, crawledAt);
   const data = [];
 

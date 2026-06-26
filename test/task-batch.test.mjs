@@ -28,10 +28,10 @@ test("taskRunKey and toOutputRows keep output naming stable", () => {
   assert.equal(taskRunKey({ rowNumber: 21, mode: "keyword", query: "cursive generator" }), "row-21-keyword-cursive-generator");
   assert.deepEqual(
     toOutputRows([{ root: "Compiler", keyword: "online compiler", volume: "12,100", kd: "53", semrush_page: 1 }], { country: "美国" }),
-    [{ 词根: "Compiler", 关键词: "online compiler", 国家: "美国", 搜索量: "12,100", KD: "53", 来源: "semrush", semrush_page: 1 }]
+    [{ 词根: "Compiler", 关键词: "online compiler", 国家: "美国", 来源: "semrush", 搜索量: "12,100", KD: "53", semrush_page: 1 }]
   );
   assert.deepEqual(
     toOutputRows([{ root: "Crafts", keyword: "craft kits", volume: "8,100", kd: "42", semrush_page: 1 }], { country: "美国", source: "amazon_catalog" }),
-    [{ 词根: "Crafts", 关键词: "craft kits", 国家: "美国", 搜索量: "8,100", KD: "42", 来源: "amazon_catalog", semrush_page: 1 }]
+    [{ 词根: "Crafts", 关键词: "craft kits", 国家: "美国", 来源: "amazon_catalog", 搜索量: "8,100", KD: "42", semrush_page: 1 }]
   );
 });

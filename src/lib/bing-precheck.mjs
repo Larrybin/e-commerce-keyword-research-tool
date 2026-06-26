@@ -185,7 +185,7 @@ export function evaluateBingPrecheck({
   impressions,
   minImpressions
 }) {
-  const impressionsNumber = parseCompactNumber(impressions);
+  const impressionsNumber = String(impressions || "").trim() ? parseCompactNumber(impressions) : 0;
   const minImpressionsNumber = parseCompactNumber(minImpressions || DEFAULT_BING_MIN_IMPRESSIONS);
 
   const impressionFailed =

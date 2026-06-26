@@ -89,6 +89,51 @@ test("planAmazonCatalogWrites updates old keyword-only rows and skips existing U
   assert.equal(plan.skipped, 1);
 });
 
+test("planAmazonCatalogWrites deduplicates within a platform and keeps cross-platform category names", () => {
+  const existingRows = [
+    {
+      rowNumber: 2,
+      record: buildAmazonCatalogRecord({
+        platform: "Amazon",
+        keyword: "Bedding",
+        url: "https://www.amazon.com/Best-Sellers-Home-Kitchen-Bedding/zgbs/home-garden/1063252",
+        depth: 2,
+        path: ["Home & Kitchen", "Bedding"]
+      })
+    },
+    {
+      rowNumber: 3,
+      record: buildAmazonCatalogRecord({
+        platform: "Walmart",
+        keyword: "Storage",
+        url: "https://www.walmart.com/cp/storage/90828",
+        depth: 2,
+        path: ["Home", "Storage"]
+      })
+    }
+  ];
+
+  const plan = planAmazonCatalogWrites([
+    {
+      platform: "Walmart",
+      keyword: "Bedding",
+      url: "https://www.walmart.com/cp/bedding/539095",
+      depth: 2,
+      path: ["Home", "Bedding"]
+    },
+    {
+      platform: "Walmart",
+      keyword: "Storage",
+      url: "https://www.walmart.com/cp/storage/90828",
+      depth: 2,
+      path: ["Home", "Storage"]
+    }
+  ], existingRows, "2026-06-24T00:00:00.000Z");
+
+  assert.deepEqual(plan.appends.map((item) => `${item["平台"]}:${item["关键词"]}`), ["Walmart:Bedding"]);
+  assert.equal(plan.skipped, 1);
+});
+
 test("amazonCatalogAppendRange returns the direct write range", () => {
   assert.equal(amazonCatalogAppendRange(2, 3), "'Amazon目录词'!A3:J4");
   assert.equal(amazonCatalogAppendRange(0, 3), "");

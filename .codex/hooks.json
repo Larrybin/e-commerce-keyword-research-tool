@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/session_context.mjs\"",
+            "timeout": 10,
+            "statusMessage": "Loading keyword workflow reminders"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -48,20 +48,149 @@ export async function loginDash(cdp, sessionId, username, password) {
   await sleep(3000);
 }
 
-export async function openSemrushFromDash(cdp, sessionId) {
+const DEFAULT_BLOCKED_SEMRUSH_NODES = [1, 2];
+
+export function semrushNodeNumberFromText(text) {
+  const match = String(text || "").match(/节点\s*(\d+)/);
+  return match ? Number(match[1]) : 0;
+}
+
+export function isSemrushNodeUnavailableMessage(message) {
+  return /节点暂不可用|切换节点|code:\s*1/i.test(String(message || ""));
+}
+
+export async function dismissJavascriptDialog(cdp, sessionId) {
+  return cdp
+    .send("Page.handleJavaScriptDialog", { accept: true }, sessionId)
+    .then(() => true)
+    .catch(() => false);
+}
+
+export function watchJavascriptDialogs(cdp, sessionId, callback) {
+  return cdp.on("Page.javascriptDialogOpening", (event) => {
+    if (event.sessionId && event.sessionId !== sessionId) return;
+    callback?.(event);
+    cdp.send("Page.handleJavaScriptDialog", { accept: true }, event.sessionId || sessionId).catch(() => {});
+  });
+}
+
+async function selectAllowedSemrushNode(cdp, sessionId, blockedNodes = []) {
+  const blocked = [...new Set([...DEFAULT_BLOCKED_SEMRUSH_NODES, ...blockedNodes].map(Number).filter(Boolean))];
+  const current = await evaluate(
+    cdp,
+    sessionId,
+    `(() => {
+      const clean = (value) => (value || "").replace(/\\s+/g, " ").trim();
+      const nodeNumber = (text) => Number(clean(text).match(/节点\\s*(\\d+)/)?.[1] || 0);
+      const visible = (el) => {
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      };
+      const candidates = [...document.querySelectorAll("button, [role=button], [role=combobox], nb-select, .select-button, [class*=select], [class*=Select]")]
+        .filter(visible)
+        .map((el) => ({ el, text: clean(el.innerText || el.textContent || el.value), node: nodeNumber(el.innerText || el.textContent || el.value) }))
+        .filter((item) => item.node)
+        .sort((a, b) => a.text.length - b.text.length);
+      return candidates[0] ? { node: candidates[0].node, text: candidates[0].text } : { node: 0, text: "" };
+    })()`
+  );
+  if (current.node && !blocked.includes(current.node)) {
+    return { ...current, changed: false, blockedNodes: blocked };
+  }
+
+  const opened = await evaluate(
+    cdp,
+    sessionId,
+    `(() => {
+      const clean = (value) => (value || "").replace(/\\s+/g, " ").trim();
+      const nodeNumber = (text) => Number(clean(text).match(/节点\\s*(\\d+)/)?.[1] || 0);
+      const visible = (el) => {
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      };
+      const trigger = [...document.querySelectorAll("button, [role=button], [role=combobox], nb-select, .select-button, [class*=select], [class*=Select]")]
+        .filter(visible)
+        .map((el) => ({ el, text: clean(el.innerText || el.textContent || el.value), node: nodeNumber(el.innerText || el.textContent || el.value) }))
+        .filter((item) => item.node)
+        .sort((a, b) => a.text.length - b.text.length)[0];
+      if (!trigger) return { ok: false, reason: "node trigger not found" };
+      trigger.el.click();
+      return { ok: true, currentNode: trigger.node, currentText: trigger.text };
+    })()`
+  );
+  if (!opened.ok) return { ...current, changed: false, blockedNodes: blocked, reason: opened.reason };
+  await sleep(500);
+
+  return evaluate(
+    cdp,
+    sessionId,
+    `(() => {
+      const blocked = new Set(${JSON.stringify(blocked)});
+      const clean = (value) => (value || "").replace(/\\s+/g, " ").trim();
+      const nodeNumber = (text) => Number(clean(text).match(/节点\\s*(\\d+)/)?.[1] || 0);
+      const visible = (el) => {
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      };
+      const options = [...document.querySelectorAll("[role=option], nb-option, mat-option, li, button, [class*=option], [class*=Option]")]
+        .filter(visible)
+        .map((el) => ({ el, text: clean(el.innerText || el.textContent), node: nodeNumber(el.innerText || el.textContent) }))
+        .filter((item) => item.node && !blocked.has(item.node))
+        .sort((a, b) => a.node - b.node || a.text.length - b.text.length);
+      const option = options[0];
+      if (!option) return { node: 0, text: "", changed: false, reason: "allowed node not found", blockedNodes: [...blocked] };
+      option.el.click();
+      return { node: option.node, text: option.text, changed: true, blockedNodes: [...blocked] };
+    })()`
+  );
+}
+
+async function readDashNodeUnavailableMessage(cdp, sessionId) {
+  return evaluate(
+    cdp,
+    sessionId,
+    `(() => {
+      const text = document.body?.innerText || "";
+      return text.match(/节点暂不可用[\\s\\S]{0,120}code:\\s*1/i)?.[0] || "";
+    })()`,
+    5000
+  ).catch(() => "");
+}
+
+export async function openSemrushFromDash(cdp, sessionId, { blockedNodes = [] } = {}) {
   await waitForCondition(
     cdp,
     sessionId,
-    `Boolean([...document.querySelectorAll("button")].find((button) => /打开/.test(button.innerText || button.textContent || "")))`,
+    `document.body.innerText.includes("API 今日配额") && Boolean([...document.querySelectorAll("button")].find((button) => /打开/.test(button.innerText || button.textContent || "")))`,
     30000
   );
-  await clickByText(cdp, sessionId, {
-    selector: "button",
-    text: "打开",
-    includes: true,
-    inputClick: true
-  });
-  await sleep(100);
+  const blocked = new Set([...DEFAULT_BLOCKED_SEMRUSH_NODES, ...blockedNodes].map(Number).filter(Boolean));
+  let node = null;
+
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
+    node = await selectAllowedSemrushNode(cdp, sessionId, [...blocked]);
+    await sleep(2000);
+    await clickByText(cdp, sessionId, {
+      selector: "button",
+      text: "打开",
+      includes: true,
+      inputClick: true
+    });
+    await sleep(3000);
+
+    const message = await readDashNodeUnavailableMessage(cdp, sessionId);
+    if (!isSemrushNodeUnavailableMessage(message)) {
+      return { node };
+    }
+
+    if (node?.node) blocked.add(node.node);
+    await sleep(3000);
+  }
+
+  throw new Error(`Semrush nodes unavailable: ${[...blocked].sort((a, b) => a - b).join(",")}`);
 }
 
 export async function searchSemrush(cdp, sessionId, query) {
@@ -183,21 +312,24 @@ export function countryDatabaseCode(country) {
   return COUNTRY_DATABASE_CODES[value] || COUNTRY_DATABASE_CODES[value.toUpperCase()] || value.toLowerCase();
 }
 
+export async function readCurrentPageUrl(cdp, sessionId) {
+  const history = await cdp.send("Page.getNavigationHistory", {}, sessionId).catch(() => null);
+  const entry = history?.entries?.[history.currentIndex];
+  if (entry?.url) {
+    return entry.url;
+  }
+  return evaluate(cdp, sessionId, "location.href", 5000);
+}
+
 export async function navigateToKeywordOverview(cdp, sessionId, query, country = "") {
   const databaseCode = countryDatabaseCode(country) || "us";
-  const targetUrl = await evaluate(
-    cdp,
-    sessionId,
-    `(() => {
-      const current = new URL(location.href);
-      const next = new URL("/analytics/keywordoverview/", current.origin);
-      next.searchParams.set("q", ${JSON.stringify(query)});
-      next.searchParams.set("db", ${JSON.stringify(databaseCode)});
-      const gmitm = current.searchParams.get("__gmitm");
-      if (gmitm) next.searchParams.set("__gmitm", gmitm);
-      return next.toString();
-    })()`
-  );
+  const current = new URL(await readCurrentPageUrl(cdp, sessionId));
+  const next = new URL("/analytics/keywordoverview/", current.origin);
+  next.searchParams.set("q", query);
+  next.searchParams.set("db", databaseCode);
+  const gmitm = current.searchParams.get("__gmitm");
+  if (gmitm) next.searchParams.set("__gmitm", gmitm);
+  const targetUrl = next.toString();
   await navigateAndWait(cdp, sessionId, targetUrl, 45000).catch(async () => {
     await sleep(4000);
   });
@@ -211,6 +343,43 @@ const KEYWORD_MAGIC_MATCH_TYPES = {
   完全匹配: "exact",
   相关性: "related"
 };
+
+const DEFAULT_KEYWORD_MAGIC_EXCLUDE_KEYWORDS = [
+  "porn",
+  "xxx",
+  "nude",
+  "naked",
+  "onlyfans",
+  "how",
+  "what",
+  "when",
+  "where",
+  "why",
+  "who",
+  "free",
+  "download",
+  "jobs",
+  "near me",
+  "supplier",
+  "manufacturer",
+  "wholesale",
+  "login",
+  "definition",
+  "meaning",
+  "password generator",
+  "citation generator"
+];
+
+function applyDefaultKeywordMagicExcludes(filter) {
+  return {
+    ...filter,
+    phrase: DEFAULT_KEYWORD_MAGIC_EXCLUDE_KEYWORDS.map((value) => ({
+      inverted: true,
+      operation: 7,
+      value
+    }))
+  };
+}
 
 export function buildKeywordMagicUrl(currentUrl, {
   query,
@@ -231,12 +400,10 @@ export function buildKeywordMagicUrl(currentUrl, {
     next.searchParams.set("type", type);
   }
 
-  const filter = structuredClone(EMPTY_KEYWORD_MAGIC_FILTER);
+  const filter = applyDefaultKeywordMagicExcludes(structuredClone(EMPTY_KEYWORD_MAGIC_FILTER));
   filter.volume = buildNumericFilterEntries(volumeMin, volumeMax);
   filter.difficulty = buildNumericFilterEntries(kdMin, kdMax);
-  if (filter.volume.length > 0 || filter.difficulty.length > 0) {
-    next.searchParams.set("filter", encodeKeywordMagicFilter(filter));
-  }
+  next.searchParams.set("filter", encodeKeywordMagicFilter(filter));
 
   const gmitm = current.searchParams.get("__gmitm");
   if (gmitm) {
@@ -246,7 +413,7 @@ export function buildKeywordMagicUrl(currentUrl, {
 }
 
 export async function navigateToKeywordMagic(cdp, sessionId, task) {
-  const currentUrl = await evaluate(cdp, sessionId, "location.href");
+  const currentUrl = await readCurrentPageUrl(cdp, sessionId);
   await navigateAndWait(cdp, sessionId, buildKeywordMagicUrl(currentUrl, task), 45000).catch(async () => {
     await sleep(4000);
   });
@@ -968,7 +1135,7 @@ async function applyRangeFilterViaUrl(cdp, sessionId, filterLabel, minValue, max
   }
 
   const url = new URL(currentUrl);
-  const filter = decodeKeywordMagicFilter(url.searchParams.get("filter") || "");
+  const filter = applyDefaultKeywordMagicExcludes(decodeKeywordMagicFilter(url.searchParams.get("filter") || ""));
   filter[filterKey] = buildNumericFilterEntries(minValue, maxValue);
   url.searchParams.set("filter", encodeKeywordMagicFilter(filter));
 

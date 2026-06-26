@@ -273,61 +273,6 @@ export async function batchUpdateSheet({ sheetUrl, requests, keyPath = "" }) {
   };
 }
 
-export function buildRejectedKeywordCellFormatRequests({ sheetId, startRow, rows }) {
-  const requests = [];
-  rows.forEach((row, index) => {
-    const rowIndex = startRow + index - 1;
-    requests.push({
-      repeatCell: {
-        range: {
-          sheetId: Number(sheetId),
-          startRowIndex: rowIndex,
-          endRowIndex: rowIndex + 1,
-          startColumnIndex: 1,
-          endColumnIndex: 2
-        },
-        cell: {
-          userEnteredFormat: {
-            backgroundColor: row?.判断 === "拒绝"
-              ? { red: 1, green: 0, blue: 0 }
-              : { red: 1, green: 1, blue: 1 }
-          }
-        },
-        fields: "userEnteredFormat.backgroundColor"
-      }
-    });
-  });
-  return requests;
-}
-
-export async function formatRejectedKeywordCells({
-  sheetUrl,
-  sheetId,
-  startRow,
-  rows,
-  keyPath = ""
-}) {
-  const requests = buildRejectedKeywordCellFormatRequests({ sheetId, startRow, rows });
-  if (requests.length === 0) {
-    return { skipped: true, reason: "no_rejected_rows" };
-  }
-
-  const result = await batchUpdateSheet({ sheetUrl, requests, keyPath });
-  if (!result.ok) {
-    return {
-      ok: false,
-      status: result.status,
-      reason: result.reason || "batch_update_failed"
-    };
-  }
-
-  return {
-    ok: true,
-    formattedCells: requests.length,
-    clientEmail: result.clientEmail
-  };
-}
-
 export function buildCellBackgroundRequests({ sheetId, cells, color }) {
   return cells.map((cell) => ({
     repeatCell: {

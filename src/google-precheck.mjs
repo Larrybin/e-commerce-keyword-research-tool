@@ -72,20 +72,19 @@ async function readKeywordTable(sheetUrl) {
 }
 
 function selectKeywordRows(keywordTable, { fromRow, toRow, force }) {
+  const keywordIndex = headerIndex(keywordTable.headers, "关键词");
   const prefilterIndex = headerIndex(keywordTable.headers, "agent预判断");
-  const judgementIndex = headerIndex(keywordTable.headers, "判断");
   const serpJudgementIndex = headerIndex(keywordTable.headers, "SERP机会判断");
   const selected = [];
 
   for (const row of keywordTable.rows) {
     if (fromRow && row.rowNumber < fromRow) continue;
     if (toRow && row.rowNumber > toRow) break;
-    const judgement = String(row.values[judgementIndex] || "").trim();
-    if (!judgement && !toRow) break;
+    const keyword = String(row.values[keywordIndex] || "").trim();
+    if (!keyword && !toRow) break;
+    if (!keyword) continue;
     const prefilter = String(row.values[prefilterIndex] || "").trim();
     if (prefilter !== "继续") continue;
-    if (judgement !== "继续") continue;
-    if (!String(row.record["关键词"] || "").trim()) continue;
     if (String(row.values[serpJudgementIndex] || "").trim() && !force) continue;
     selected.push(row);
   }
